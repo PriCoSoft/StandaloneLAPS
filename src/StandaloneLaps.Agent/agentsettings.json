@@ -1,0 +1,8 @@
+{
+  "Enabled": false,
+  "DeviceId": "",
+  "ApiUrl": "https://vault.example/StandaloneLaps/",
+  "ClientCertificateSha256": "",
+  "RecoveryCertificatePath": "C:\\Program Files\\StandaloneLapsAgent\\recovery.cer",
+  "RecoveryCertificateSha256": ""
+}

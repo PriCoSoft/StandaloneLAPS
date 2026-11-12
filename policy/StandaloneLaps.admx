@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitions revision="1.0" schemaVersion="1.0">
+  <policyNamespaces><target prefix="slaps" namespace="StandaloneLaps.Policies" /></policyNamespaces>
+  <resources minRequiredRevision="1.0" />
+  <supportedOn><definitions><definition name="SupportedWindows" displayName="$(string.SupportedWindows)" /></definitions></supportedOn>
+  <categories><category name="StandaloneLaps" displayName="$(string.Category)" /></categories>
+  <policies>
+    <policy name="ConfigureStandaloneLaps" class="Machine" displayName="$(string.PolicyName)" explainText="$(string.PolicyHelp)" key="SOFTWARE\Policies\StandaloneLaps" valueName="Enabled" presentation="$(presentation.ConfigureStandaloneLaps)">
+      <parentCategory ref="StandaloneLaps" /><supportedOn ref="SupportedWindows" />
+      <enabledValue><decimal value="1" /></enabledValue><disabledValue><decimal value="0" /></disabledValue>
+      <elements>
+        <text id="DeviceId" valueName="DeviceId" required="true" />
+        <text id="ApiUrl" valueName="ApiUrl" required="true" />
+        <text id="ClientCertificateSha256" valueName="ClientCertificateSha256" required="true" />
+        <text id="RecoveryCertificatePath" valueName="RecoveryCertificatePath" required="true" />
+        <text id="RecoveryCertificateSha256" valueName="RecoveryCertificateSha256" required="true" />
+        <decimal id="PasswordAgeDays" valueName="PasswordAgeDays" minValue="1" maxValue="365" />
+        <decimal id="PasswordLength" valueName="PasswordLength" minValue="24" maxValue="128" />
+      </elements>
+    </policy>
+  </policies>
+</policyDefinitions>

@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ]; then
+    install -d -m 0700 /var/lib/slaps
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload || true
+        # Upgrade of an enrolled agent: keep it running with the new version.
+        if [ -f /etc/slaps/settings.json ]; then
+            systemctl enable slaps-agent.service >/dev/null 2>&1 || true
+            systemctl restart slaps-agent.service || true
+        fi
+    fi
+fi
+exit 0

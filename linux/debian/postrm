@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+if [ "$1" = "purge" ]; then
+    # Agent key, settings and rotation state. The last password stays valid and is stored on the SLAPS server.
+    rm -rf /etc/slaps /var/lib/slaps
+fi
+if [ -d /run/systemd/system ]; then systemctl daemon-reload || true; fi
+exit 0

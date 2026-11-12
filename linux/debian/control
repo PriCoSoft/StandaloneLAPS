@@ -1,0 +1,14 @@
+Package: slaps-agent
+Version: @VERSION@
+Architecture: all
+Maintainer: PriCoSoft GmbH <noreply@pricosoft.com>
+Depends: python3 (>= 3.6), openssl, passwd, systemd
+Section: admin
+Priority: optional
+Installed-Size: @SIZE@
+Homepage: https://www.pricosoft.com/
+Description: Standalone LAPS (SLAPS) agent
+ Rotates the password of a local account (root by default) and backs it up,
+ encrypted for the SLAPS recovery certificate, to the SLAPS server over HTTPS
+ with a client certificate. Enroll with a client package from the SLAPS
+ portal: sudo sh install.sh

@@ -1,0 +1,21 @@
+# Build output (release packages are attached to GitHub releases instead)
+artifacts/
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# Local tool and project-memory folders
+.svn/
+.ai/
+
+# Runtime data of a deployed or preview vault
+web/IisVault/App_Data/Vault/*
+!web/IisVault/App_Data/Vault/DEPLOYMENT.txt
+web/IisVault/App_Data/AgentPackage/
+
+# Key material must never be committed
+*.pfx
+*.p12
+*.key

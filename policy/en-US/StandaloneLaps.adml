@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitionResources revision="1.0" schemaVersion="1.0">
+  <displayName>Standalone LAPS</displayName><description>Standalone LAPS policy resources</description>
+  <resources>
+    <stringTable>
+      <string id="SupportedWindows">Windows Server 2022 or later with .NET 10</string>
+      <string id="Category">Standalone LAPS</string>
+      <string id="PolicyName">Configure standalone administrator password rotation</string>
+      <string id="PolicyHelp">Enables the Standalone LAPS Agent service. Only the built-in local administrator (SID ending in -500) is managed, including renamed accounts. Domain controllers are rejected. A working mutually authenticated HTTPS API and a pinned RSA recovery certificate are required. The service reads this policy every five minutes. Disabled or Not Configured stops future rotations; it does not restore an older password. Client certificate SHA-256 is the hash of the complete DER certificate, not the conventional SHA-1 thumbprint. Never deploy the recovery private key to a managed server or the API. Do not manage this account with another password rotation product.</string>
+    </stringTable>
+    <presentationTable>
+      <presentation id="ConfigureStandaloneLaps">
+        <textBox refId="DeviceId"><label>Unique device ID (GUID):</label></textBox>
+        <textBox refId="ApiUrl"><label>HTTPS API origin (for example https://vault.example:8443/):</label></textBox>
+        <textBox refId="ClientCertificateSha256"><label>Client certificate SHA-256 (64 hexadecimal characters):</label></textBox>
+        <textBox refId="RecoveryCertificatePath"><label>Local path to public recovery certificate (.cer):</label></textBox>
+        <textBox refId="RecoveryCertificateSha256"><label>Recovery certificate SHA-256:</label></textBox>
+        <decimalTextBox refId="PasswordAgeDays" defaultValue="30">Password age in days:</decimalTextBox>
+        <decimalTextBox refId="PasswordLength" defaultValue="32">Password length:</decimalTextBox>
+      </presentation>
+    </presentationTable>
+  </resources>
+</policyDefinitionResources>

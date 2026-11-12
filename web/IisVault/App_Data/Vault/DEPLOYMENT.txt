@@ -1,0 +1,3 @@
+Encrypted vault records, lifecycle markers, recoverable device archives and audit data are stored here.
+Grant the IIS application-pool identity Modify on this folder only; keep clients.json and website source read-only.
+Never place recovery private keys/PFX files here. Back up this folder together with clients.json/configuration.

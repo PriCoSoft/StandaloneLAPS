@@ -1,0 +1,11 @@
+Source-only ASP.NET Web Site, targeting .NET Framework 4.7.2.
+
+Do not copy this folder manually. Deploy it with Install-SlapsServer.ps1 from the SLAPS server package:
+
+  powershell.exe -ExecutionPolicy Bypass -File .\Install-SlapsServer.ps1 -TargetDirectory D:\Web\SLAPS -HostName slaps.example.com
+
+The installer configures IIS (SNI binding, client certificates, upload read-ahead), permissions
+(Modify only on App_Data\Vault), the SLAPS CA, recovery certificate, CRL and web.config.
+No application DLL, ASP.NET Core runtime, Web Deploy or NuGet package is required.
+Back up App_Data\Vault and the key backups separately. Existing histories are trimmed to 20 versions
+on application startup. Do not deploy the IIS Express preview copy.

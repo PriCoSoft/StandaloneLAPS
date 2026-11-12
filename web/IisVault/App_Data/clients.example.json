@@ -1,0 +1,16 @@
+[
+  {
+    "certificateSha256": "REPLACE_WITH_64_HEXADECIMAL_CHARACTERS",
+    "role": "agent",
+    "deviceId": "2b0c7224-6121-4181-9dbc-65be629c6069",
+    "displayName": "DMZ server 01"
+  },
+  {
+    "certificateSha256": "REPLACE_WITH_READER_CERTIFICATE_SHA256",
+    "role": "reader"
+  },
+  {
+    "certificateSha256": "REPLACE_WITH_ADMIN_CERTIFICATE_SHA256",
+    "role": "admin"
+  }
+]

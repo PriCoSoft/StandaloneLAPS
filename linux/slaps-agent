@@ -1,0 +1,635 @@
+#!/usr/bin/python3
+# SLAPS Linux agent: rotates a local account password and backs it up, encrypted, to the SLAPS server.
+# Python 3.6+ standard library only; AES-GCM via the system libcrypto (ctypes), RSA-OAEP and PKCS#12
+# via the openssl command line tool. Wire format identical to the Windows agent (StandaloneLaps/v1).
+import base64
+import ctypes
+import ctypes.util
+import datetime
+import fcntl
+import getpass
+import hashlib
+import json
+import os
+import pwd
+import re
+import secrets
+import signal
+import ssl
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+VERSION = "@VERSION@"
+CONF_DIR = "/etc/slaps"
+CONFIG = CONF_DIR + "/agent.conf"
+SETTINGS = CONF_DIR + "/settings.json"
+CERT = CONF_DIR + "/agent.crt"
+KEY = CONF_DIR + "/agent.key"
+RECOVERY = CONF_DIR + "/recovery.pem"
+STATE_DIR = "/var/lib/slaps"
+STATE = STATE_DIR + "/state.json"
+LOCK = "/run/slaps-agent.lock"
+INTERVAL_SECONDS = 300
+MAX_RESPONSE = 65536
+SPECIAL = "!#$%&()*+,-.:;<=>?@[]^_{|}~"
+CATEGORIES = ("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz", "0123456789", SPECIAL)
+DEFAULTS = {"Account": "root", "PasswordLength": "14", "PasswordComplexity": "4", "PasswordAgeDays": "30", "CaFile": ""}
+GUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+HEX64 = re.compile(r"^[0-9A-F]{64}$")
+
+
+class AgentError(Exception):
+    pass
+
+
+def log(level, message):
+    # systemd-journald reads the <N> syslog priority prefix (3 error, 4 warning, 6 info).
+    print("<%d>%s" % (level, message), flush=True)
+
+
+# ---- Configuration -------------------------------------------------------------------------------
+
+class Policy(object):
+    def __init__(self, values):
+        self.account = values["Account"].strip()
+        self.length = self._int(values, "PasswordLength", 8, 64)
+        self.complexity = self._int(values, "PasswordComplexity", 1, 4)
+        self.age_days = self._int(values, "PasswordAgeDays", 1, 365)
+        self.ca_file = values["CaFile"].strip()
+        if not re.match(r"^[a-z_][a-z0-9_.-]{0,31}\$?$", self.account):
+            raise AgentError("Account '%s' in %s is not a valid user name." % (self.account, CONFIG))
+        if self.ca_file and not os.path.isfile(self.ca_file):
+            raise AgentError("CaFile '%s' in %s does not exist." % (self.ca_file, CONFIG))
+
+    @staticmethod
+    def _int(values, name, low, high):
+        try:
+            value = int(values[name].strip(), 10)
+        except ValueError:
+            raise AgentError("%s in %s must be a number." % (name, CONFIG))
+        if value < low or value > high:
+            raise AgentError("%s in %s must be between %d and %d." % (name, CONFIG, low, high))
+        return value
+
+
+def load_policy():
+    values = dict(DEFAULTS)
+    if os.path.exists(CONFIG):
+        with open(CONFIG, "r", encoding="utf-8") as handle:
+            for number, raw in enumerate(handle, 1):
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    raise AgentError("%s line %d: expected Name=Value." % (CONFIG, number))
+                name, value = [part.strip() for part in line.split("=", 1)]
+                if name not in DEFAULTS:
+                    raise AgentError("%s line %d: unknown setting '%s'." % (CONFIG, number, name))
+                values[name] = value
+    return Policy(values)
+
+
+def load_settings():
+    if not os.path.exists(SETTINGS):
+        raise AgentError("%s is missing; enroll the agent with a SLAPS client package (install.sh)." % SETTINGS)
+    with open(SETTINGS, "r", encoding="utf-8") as handle:
+        settings = json.load(handle)
+    return validate_settings(settings, SETTINGS)
+
+
+def validate_settings(settings, source):
+    try:
+        result = {
+            "deviceId": str(settings["deviceId"]).lower(),
+            "displayName": str(settings.get("displayName", "")),
+            "apiUrl": str(settings["apiUrl"]),
+            "clientCertificateSha256": str(settings["clientCertificateSha256"]).upper(),
+            "recoveryCertificateSha256": str(settings["recoveryCertificateSha256"]).upper(),
+        }
+    except (KeyError, TypeError):
+        raise AgentError("%s is incomplete." % source)
+    if not GUID.match(result["deviceId"]) or result["deviceId"] == "00000000-0000-0000-0000-000000000000":
+        raise AgentError("%s: deviceId is not a GUID." % source)
+    if not re.match(r"^https://[^/\s?#]+(/[^\s?#]*)?$", result["apiUrl"]):
+        raise AgentError("%s: apiUrl must be an https URL." % source)
+    if not result["apiUrl"].endswith("/"):
+        result["apiUrl"] += "/"
+    for name in ("clientCertificateSha256", "recoveryCertificateSha256"):
+        if not HEX64.match(result[name]):
+            raise AgentError("%s: %s is not a SHA-256 fingerprint." % (source, name))
+    return result
+
+
+# ---- Certificates and OpenSSL --------------------------------------------------------------------
+
+def openssl(args, data=None, env=None):
+    try:
+        process = subprocess.run(["openssl"] + args, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    except FileNotFoundError:
+        raise AgentError("The openssl command is not installed.")
+    if process.returncode != 0:
+        detail = process.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise AgentError("openssl %s failed%s" % (args[0], (": " + detail[-1][:200]) if detail else "."))
+    return process.stdout
+
+
+def pem_blocks(text, label):
+    pattern = r"-----BEGIN %s-----[\s\S]+?-----END %s-----" % (label, label)
+    return re.findall(pattern, text)
+
+
+def read_certificate_der(path):
+    with open(path, "r", encoding="ascii") as handle:
+        blocks = pem_blocks(handle.read(), "CERTIFICATE")
+    if len(blocks) != 1:
+        raise AgentError("%s must contain exactly one certificate." % path)
+    return ssl.PEM_cert_to_DER_cert(blocks[0])
+
+
+def sha256_hex(data):
+    return hashlib.sha256(data).hexdigest().upper()
+
+
+def public_key_of_certificate(path):
+    return openssl(["x509", "-in", path, "-noout", "-pubkey"])
+
+
+def public_key_of_key(path):
+    return openssl(["pkey", "-in", path, "-pubout"])
+
+
+def check_files(settings):
+    for path in (CERT, KEY, RECOVERY):
+        if not os.path.isfile(path):
+            raise AgentError("%s is missing; enroll the agent again." % path)
+    if os.stat(KEY).st_mode & 0o077:
+        raise AgentError("%s must not be readable by group or others (chmod 600)." % KEY)
+    if sha256_hex(read_certificate_der(CERT)) != settings["clientCertificateSha256"]:
+        raise AgentError("%s does not match clientCertificateSha256." % CERT)
+    if sha256_hex(read_certificate_der(RECOVERY)) != settings["recoveryCertificateSha256"]:
+        raise AgentError("%s does not match recoveryCertificateSha256." % RECOVERY)
+    if public_key_of_certificate(CERT) != public_key_of_key(KEY):
+        raise AgentError("%s does not belong to %s." % (KEY, CERT))
+
+
+# ---- AES-256-GCM via libcrypto -------------------------------------------------------------------
+
+class Gcm(object):
+    SET_IVLEN, GET_TAG, SET_TAG = 0x9, 0x10, 0x11
+
+    def __init__(self):
+        lib = None
+        for name in (ctypes.util.find_library("crypto"), "libcrypto.so.3", "libcrypto.so.1.1", "libcrypto.so"):
+            if not name:
+                continue
+            try:
+                lib = ctypes.CDLL(name)
+                break
+            except OSError:
+                continue
+        if lib is None:
+            raise AgentError("libcrypto (OpenSSL) was not found.")
+        p, i = ctypes.c_void_p, ctypes.c_int
+        lib.EVP_CIPHER_CTX_new.restype = p
+        lib.EVP_CIPHER_CTX_free.argtypes = [p]
+        lib.EVP_aes_256_gcm.restype = p
+        for prefix in ("Encrypt", "Decrypt"):
+            getattr(lib, "EVP_%sInit_ex" % prefix).argtypes = [p, p, p, ctypes.c_char_p, ctypes.c_char_p]
+            getattr(lib, "EVP_%sUpdate" % prefix).argtypes = [p, p, ctypes.POINTER(i), ctypes.c_char_p, i]
+            getattr(lib, "EVP_%sFinal_ex" % prefix).argtypes = [p, p, ctypes.POINTER(i)]
+        lib.EVP_CIPHER_CTX_ctrl.argtypes = [p, i, i, p]
+        self.lib = lib
+
+    def _run(self, encrypt, key, nonce, data, aad, tag=None):
+        if len(key) != 32 or len(nonce) != 12:
+            raise AgentError("Invalid AES-GCM parameters.")
+        lib = self.lib
+        prefix = "Encrypt" if encrypt else "Decrypt"
+        init, update, final = (getattr(lib, "EVP_%s%s" % (prefix, s)) for s in ("Init_ex", "Update", "Final_ex"))
+        ctx = lib.EVP_CIPHER_CTX_new()
+        if not ctx:
+            raise AgentError("EVP_CIPHER_CTX_new failed.")
+        output = ctypes.create_string_buffer(len(data) + 32)
+        written = ctypes.c_int(0)
+        try:
+            ok = init(ctx, lib.EVP_aes_256_gcm(), None, None, None) == 1
+            ok = ok and lib.EVP_CIPHER_CTX_ctrl(ctx, self.SET_IVLEN, 12, None) == 1
+            ok = ok and init(ctx, None, None, key, nonce) == 1
+            ok = ok and update(ctx, None, ctypes.byref(written), aad, len(aad)) == 1
+            ok = ok and update(ctx, output, ctypes.byref(written), data, len(data)) == 1
+            length = written.value
+            if not ok:
+                raise AgentError("AES-GCM setup failed.")
+            if not encrypt:
+                tag_buffer = ctypes.create_string_buffer(bytes(tag), 16)
+                if lib.EVP_CIPHER_CTX_ctrl(ctx, self.SET_TAG, 16, tag_buffer) != 1:
+                    raise AgentError("AES-GCM tag rejected.")
+            tail = ctypes.create_string_buffer(32)
+            if final(ctx, tail, ctypes.byref(written)) != 1:
+                raise AgentError("AES-GCM authentication failed.")
+            result = output.raw[:length] + tail.raw[:written.value]
+            if encrypt:
+                tag_out = ctypes.create_string_buffer(16)
+                if lib.EVP_CIPHER_CTX_ctrl(ctx, self.GET_TAG, 16, tag_out) != 1:
+                    raise AgentError("AES-GCM tag unavailable.")
+                return result, tag_out.raw
+            return result
+        finally:
+            ctypes.memset(output, 0, len(output))
+            lib.EVP_CIPHER_CTX_free(ctx)
+
+    def encrypt(self, key, nonce, plaintext, aad):
+        return self._run(True, key, nonce, plaintext, aad)
+
+    def decrypt(self, key, nonce, ciphertext, tag, aad):
+        return self._run(False, key, nonce, ciphertext, aad, tag)
+
+
+# ---- Envelope (StandaloneLaps/v1) ---------------------------------------------------------------
+
+def dotnet_timestamp(moment):
+    # Matches .NET DateTimeOffset.ToString("O") for UTC, e.g. 2026-11-12T10:15:30.1234560+00:00,
+    # because the server rebuilds the associated data from the parsed timestamp.
+    return moment.strftime("%Y-%m-%dT%H:%M:%S.") + "%06d0+00:00" % moment.microsecond
+
+
+def associated_data(envelope):
+    return ("StandaloneLaps/v1|%s|%s|%s|%s|%s" % (envelope["deviceId"], envelope["rotationId"], envelope["createdUtc"],
+                                                  envelope["recipientSha256"], envelope["wrappedKey"])).encode("utf-8")
+
+
+def encrypt_payload(payload, recovery_pem, recovery_sha):
+    key = secrets.token_bytes(32)
+    nonce = secrets.token_bytes(12)
+    wrapped = openssl(["pkeyutl", "-encrypt", "-certin", "-inkey", recovery_pem, "-pkeyopt", "rsa_padding_mode:oaep",
+                       "-pkeyopt", "rsa_oaep_md:sha256", "-pkeyopt", "rsa_mgf1_md:sha256"], data=key)
+    if len(wrapped) < 384:
+        raise AgentError("The recovery certificate must use RSA 3072 or stronger.")
+    envelope = {"version": 1, "deviceId": payload["deviceId"], "rotationId": payload["rotationId"], "createdUtc": payload["createdUtc"],
+                "recipientSha256": recovery_sha, "wrappedKey": base64.b64encode(wrapped).decode("ascii"),
+                "nonce": base64.b64encode(nonce).decode("ascii")}
+    plaintext = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    ciphertext, tag = Gcm().encrypt(key, nonce, plaintext, associated_data(envelope))
+    envelope["tag"] = base64.b64encode(tag).decode("ascii")
+    envelope["ciphertext"] = base64.b64encode(ciphertext).decode("ascii")
+    return envelope
+
+
+def decrypt_envelope(envelope, private_key_pem):
+    key = openssl(["pkeyutl", "-decrypt", "-inkey", private_key_pem, "-pkeyopt", "rsa_padding_mode:oaep",
+                   "-pkeyopt", "rsa_oaep_md:sha256", "-pkeyopt", "rsa_mgf1_md:sha256"], data=base64.b64decode(envelope["wrappedKey"]))
+    plaintext = Gcm().decrypt(key, base64.b64decode(envelope["nonce"]), base64.b64decode(envelope["ciphertext"]),
+                              base64.b64decode(envelope["tag"]), associated_data(envelope))
+    return json.loads(plaintext.decode("utf-8"))
+
+
+ENVELOPE_FIELDS = ("version", "deviceId", "rotationId", "createdUtc", "recipientSha256", "wrappedKey", "nonce", "tag", "ciphertext")
+
+
+def same_envelope(a, b):
+    def norm(e):
+        return tuple(str(e.get(name, "")).lower() if name in ("deviceId", "rotationId") else str(e.get(name, "")) for name in ENVELOPE_FIELDS)
+    return isinstance(b, dict) and norm(a) == norm(b)
+
+
+# ---- SLAPS API -----------------------------------------------------------------------------------
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+class Api(object):
+    def __init__(self, settings, policy):
+        self.settings = settings
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = True
+        context.verify_mode = ssl.CERT_REQUIRED
+        if policy.ca_file:
+            context.load_verify_locations(cafile=policy.ca_file)
+        else:
+            context.load_default_certs()
+        # IIS requests the client certificate by TLS renegotiation on api.aspx; TLS 1.3 has no renegotiation.
+        if hasattr(ssl, "TLSVersion"):
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.maximum_version = ssl.TLSVersion.TLSv1_2
+        else:
+            context.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1 | getattr(ssl, "OP_NO_TLSv1_3", 0)
+        context.load_cert_chain(CERT, KEY)
+        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context), NoRedirect())
+
+    def request(self, method, query, body=None, expect=(200, 204)):
+        url = self.settings["apiUrl"] + "api.aspx?" + query
+        data = body.encode("utf-8") if body is not None else (b"" if method in ("POST", "PUT") else None)
+        req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json", "Accept": "application/json"})
+        try:
+            response = self.opener.open(req, timeout=30)
+            status, content = response.status, response.read(MAX_RESPONSE + 1)
+        except urllib.error.HTTPError as error:
+            status, content = error.code, b""
+        except (urllib.error.URLError, OSError) as error:
+            raise AgentError("The SLAPS server is not reachable: %s" % getattr(error, "reason", error))
+        if len(content) > MAX_RESPONSE:
+            raise AgentError("API response is too large.")
+        if status not in expect:
+            raise AgentError("API %s returned HTTP %d." % (method, status))
+        return status, content.decode("utf-8")
+
+    def path(self, rotation):
+        return "device=%s&rotation=%s" % (self.settings["deviceId"], rotation)
+
+    def store_and_verify(self, envelope):
+        self.request("PUT", self.path(envelope["rotationId"]), json.dumps(envelope, separators=(",", ":")), expect=(204,))
+        status, content = self.request("GET", self.path(envelope["rotationId"]), expect=(200,))
+        if not same_envelope(envelope, json.loads(content)):
+            raise AgentError("Backup read-back mismatch.")
+
+    def report_applied(self, rotation):
+        self.request("POST", self.path(rotation) + "&action=applied", expect=(204,))
+
+
+# ---- Account, password, state --------------------------------------------------------------------
+
+def generate_password(length, complexity):
+    if length < 8 or length > 64 or complexity < 1 or complexity > 4:
+        raise AgentError("Invalid password rules.")
+    alphabet = "".join(CATEGORIES[:complexity])
+    chars = [secrets.choice(CATEGORIES[i] if i < complexity else alphabet) for i in range(length)]
+    for i in range(length - 1, 0, -1):
+        j = secrets.randbelow(i + 1)
+        chars[i], chars[j] = chars[j], chars[i]
+    return "".join(chars)
+
+
+def resolve_account(name):
+    try:
+        entry = pwd.getpwnam(name)
+    except KeyError:
+        raise AgentError("Local account '%s' does not exist." % name)
+    return {"name": entry.pw_name, "id": "uid:%d" % entry.pw_uid}
+
+
+def set_password(account, password):
+    process = subprocess.run(["chpasswd"], input=("%s:%s\n" % (account, password)).encode("utf-8"),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if process.returncode != 0:
+        detail = process.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise AgentError("chpasswd failed%s" % ((": " + detail[-1][:200]) if detail else "."))
+
+
+def read_state():
+    if not os.path.exists(STATE):
+        return None
+    with open(STATE, "r", encoding="utf-8") as handle:
+        state = json.load(handle)
+    if not isinstance(state, dict) or not state.get("accountId") or not GUID.match(str(state.get("rotationId", ""))) \
+            or not isinstance(state.get("lastAppliedEpoch"), (int, float)):
+        raise AgentError("%s is invalid." % STATE)
+    return state
+
+
+def write_private_file(path, content, mode=0o600):
+    directory = os.path.dirname(path)
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(dir=directory, prefix=".slaps-")
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+        directory_handle = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(directory_handle)
+        finally:
+            os.close(directory_handle)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+# ---- Rotation ------------------------------------------------------------------------------------
+
+def rotate_if_due(force=False):
+    policy = load_policy()
+    settings = load_settings()
+    check_files(settings)
+    account = resolve_account(policy.account)
+    api = Api(settings, policy)
+    previous = read_state()
+    now = time.time()
+    reason = "initial"
+    if previous and previous["accountId"] == account["id"] and previous.get("deviceId") == settings["deviceId"]:
+        if previous["lastAppliedEpoch"] > now + 300:
+            raise AgentError("Clock precedes saved rotation.")
+        reason = "forced" if force else "expired"
+        if not force and now - previous["lastAppliedEpoch"] < policy.age_days * 86400:
+            api.report_applied(previous["rotationId"])
+            return None
+    rotation = str(uuid.uuid4())
+    created = dotnet_timestamp(datetime.datetime.fromtimestamp(now, datetime.timezone.utc))
+    password = generate_password(policy.length, policy.complexity)
+    payload = {"version": 1, "deviceId": settings["deviceId"], "rotationId": rotation, "createdUtc": created,
+               "computerName": os.uname().nodename.split(".")[0].upper(), "accountName": account["name"],
+               "accountSid": account["id"], "password": password}
+    envelope = encrypt_payload(payload, RECOVERY, settings["recoveryCertificateSha256"])
+    api.store_and_verify(envelope)
+    set_password(account["name"], password)
+    password = payload["password"] = None
+    write_private_file(STATE, json.dumps({"accountId": account["id"], "deviceId": settings["deviceId"], "rotationId": rotation,
+                                          "lastAppliedUtc": created, "lastAppliedEpoch": now}).encode("utf-8"))
+    api.report_applied(rotation)
+    return reason, account["name"], rotation, policy.age_days
+
+
+def locked(action):
+    handle = open(LOCK, "a")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        return action()
+    finally:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        handle.close()
+
+
+def describe(result):
+    reason, account, rotation, age = result
+    return "1000 Password of '%s' rotated (%s) and backed up; rotation %s; next rotation in %d days." % (account, reason, rotation, age)
+
+
+def run_service():
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    log(6, "1002 SLAPS agent %s started; checking every %d seconds." % (VERSION, INTERVAL_SECONDS))
+    while not stop.is_set():
+        try:
+            result = locked(rotate_if_due)
+            if result:
+                log(6, describe(result))
+        except AgentError as error:
+            log(3, "1001 Rotation cycle failed: %s" % error)
+        except Exception as error:  # keep the service alive; the next cycle retries
+            log(3, "1001 Rotation cycle failed (%s)." % type(error).__name__)
+        stop.wait(INTERVAL_SECONDS)
+    log(6, "1002 SLAPS agent stopped.")
+
+
+# ---- Commands ------------------------------------------------------------------------------------
+
+def require_root():
+    if os.geteuid() != 0:
+        raise AgentError("Run as root.")
+
+
+def enroll(directory, api_url=None):
+    require_root()
+    with open(os.path.join(directory, "slaps-settings.json"), "r", encoding="utf-8-sig") as handle:
+        settings = json.load(handle)
+    if api_url:
+        settings["apiUrl"] = api_url
+    settings = validate_settings(settings, "slaps-settings.json")
+    with open(os.path.join(directory, "recovery.cer"), "rb") as handle:
+        recovery = handle.read()
+    if sha256_hex(recovery) != settings["recoveryCertificateSha256"]:
+        raise AgentError("recovery.cer does not match the fingerprint in slaps-settings.json.")
+    password = os.environ.get("SLAPS_PFX_PASSWORD") or getpass.getpass("PFX password (shown once in the SLAPS portal): ")
+    env = dict(os.environ, SLAPS_PFX_PASSWORD=password)
+    pfx = os.path.join(directory, "agent.pfx")
+
+    def extract(extra):
+        try:
+            return openssl(["pkcs12", "-in", pfx, "-passin", "env:SLAPS_PFX_PASSWORD"] + extra, env=env)
+        except AgentError:
+            # PFX files exported by Windows may use RC2/3DES, which OpenSSL 3 only reads with -legacy.
+            return openssl(["pkcs12", "-legacy", "-in", pfx, "-passin", "env:SLAPS_PFX_PASSWORD"] + extra, env=env)
+    try:
+        certificates = pem_blocks(extract(["-clcerts", "-nokeys"]).decode("ascii", "replace"), "CERTIFICATE")
+        keys = pem_blocks(extract(["-nocerts", "-nodes"]).decode("ascii", "replace"), "PRIVATE KEY")
+    except AgentError as error:
+        raise AgentError("agent.pfx could not be opened (wrong password?). %s" % error)
+    if len(certificates) != 1 or len(keys) != 1:
+        raise AgentError("agent.pfx must contain one certificate and one private key.")
+    if sha256_hex(ssl.PEM_cert_to_DER_cert(certificates[0])) != settings["clientCertificateSha256"]:
+        raise AgentError("agent.pfx does not match the fingerprint in slaps-settings.json.")
+    os.makedirs(CONF_DIR, mode=0o755, exist_ok=True)
+    write_private_file(KEY, (keys[0] + "\n").encode("ascii"), 0o600)
+    write_private_file(CERT, (certificates[0] + "\n").encode("ascii"), 0o644)
+    write_private_file(RECOVERY, ssl.DER_cert_to_PEM_cert(recovery).encode("ascii"), 0o644)
+    write_private_file(SETTINGS, (json.dumps(settings, indent=2) + "\n").encode("utf-8"), 0o644)
+    check_files(settings)
+    print("Enrolled device %s (%s); API %s" % (settings["deviceId"], settings["displayName"], settings["apiUrl"]))
+
+
+def validate_config():
+    policy = load_policy()
+    settings = load_settings()
+    check_files(settings)
+    account = resolve_account(policy.account)
+    state = read_state()
+    print("SLAPS agent %s" % VERSION)
+    print("Device:            %s (%s)" % (settings["deviceId"], settings["displayName"]))
+    print("API:               %s" % settings["apiUrl"])
+    print("Client cert:       %s" % settings["clientCertificateSha256"])
+    print("Recovery cert:     %s" % settings["recoveryCertificateSha256"])
+    print("Account:           %s (%s)" % (account["name"], account["id"]))
+    print("Password rules:    length %d, complexity %d, age %d days" % (policy.length, policy.complexity, policy.age_days))
+    print("CA file:           %s" % (policy.ca_file or "(system trust store)"))
+    if state:
+        print("Last rotation:     %s (%s)" % (state.get("lastAppliedUtc"), state["rotationId"]))
+    else:
+        print("Last rotation:     none yet")
+    print("Configuration is valid.")
+
+
+def test_connection():
+    policy = load_policy()
+    settings = load_settings()
+    check_files(settings)
+    api = Api(settings, policy)
+    api.request("GET", "device=" + settings["deviceId"], expect=(200,))
+    print("GET history: 200")
+    api.request("PUT", api.path(str(uuid.uuid4())), "{}", expect=(400,))
+    print("PUT invalid envelope: 400 (expected)")
+    print("Connection to the SLAPS server works.")
+
+
+def self_test():
+    directory = tempfile.mkdtemp(prefix="slaps-selftest-")
+    try:
+        key = os.path.join(directory, "key.pem")
+        cert = os.path.join(directory, "cert.pem")
+        openssl(["req", "-x509", "-newkey", "rsa:3072", "-nodes", "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=SLAPS self-test"])
+        sha = sha256_hex(read_certificate_der(cert))
+        payload = {"version": 1, "deviceId": str(uuid.uuid4()), "rotationId": str(uuid.uuid4()),
+                   "createdUtc": dotnet_timestamp(datetime.datetime.now(datetime.timezone.utc)), "computerName": "TEST", "accountName": "root",
+                   "accountSid": "uid:0", "password": generate_password(14, 4)}
+        envelope = encrypt_payload(payload, cert, sha)
+        if decrypt_envelope(envelope, key) != payload:
+            raise AgentError("Round trip mismatch.")
+        tampered = dict(envelope, createdUtc=envelope["createdUtc"].replace("+00:00", "+00:01"))
+        try:
+            decrypt_envelope(tampered, key)
+            raise AgentError("Tampered envelope was accepted.")
+        except AgentError as error:
+            if "Tampered" in str(error):
+                raise
+        print("Self-test passed: AES-256-GCM (libcrypto) and RSA-OAEP-SHA256 (openssl) work.")
+    finally:
+        for name in os.listdir(directory):
+            os.unlink(os.path.join(directory, name))
+        os.rmdir(directory)
+
+
+USAGE = """SLAPS Linux agent %s
+Usage: slaps-agent <command>
+  run                   service loop (systemd)
+  once                  one rotation check now
+  rotate-now            rotate the password immediately
+  validate-config       show and check the effective configuration
+  test-connection       check the connection to the SLAPS server (GET 200 / PUT 400)
+  enroll <dir> [--api-url URL]   import a SLAPS client package (agent.pfx, recovery.cer, slaps-settings.json)
+  self-test             check the local cryptography
+  version"""
+
+
+def main(argv):
+    command = argv[1] if len(argv) > 1 else ""
+    try:
+        if command == "run":
+            require_root()
+            run_service()
+        elif command in ("once", "rotate-now"):
+            require_root()
+            result = locked(lambda: rotate_if_due(force=command == "rotate-now"))
+            print(describe(result) if result else "No rotation due.")
+        elif command == "validate-config":
+            require_root()
+            validate_config()
+        elif command == "test-connection":
+            require_root()
+            test_connection()
+        elif command == "enroll" and len(argv) in (3, 5) and (len(argv) == 3 or argv[3] == "--api-url"):
+            enroll(argv[2], argv[4] if len(argv) == 5 else None)
+        elif command == "self-test":
+            self_test()
+        elif command == "version":
+            print(VERSION)
+        else:
+            print(USAGE % VERSION)
+            return 2
+        return 0
+    except AgentError as error:
+        print("Error: %s" % error, file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

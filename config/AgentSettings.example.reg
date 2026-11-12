@@ -1,0 +1,10 @@
+Windows Registry Editor Version 5.00
+
+; Example only. Replace every placeholder before enabling. Native password policy stays under System\LAPS.
+[HKEY_LOCAL_MACHINE\SOFTWARE\PriCoSoft\SLAPS]
+"Enabled"=dword:00000000
+"DeviceId"="REPLACE_WITH_UNIQUE_DEVICE_GUID"
+"ApiUrl"="https://vault.example/StandaloneLaps/"
+"ClientCertificateSha256"="REPLACE_WITH_64_HEXADECIMAL_CHARACTERS"
+"RecoveryCertificatePath"="C:\\Program Files\\StandaloneLapsAgent\\recovery.cer"
+"RecoveryCertificateSha256"="REPLACE_WITH_64_HEXADECIMAL_CHARACTERS"
