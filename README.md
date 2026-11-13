@@ -6,6 +6,8 @@ Everything targets **.NET Framework 4.7.2**, which ships with Windows Server 201
 
 **Download:** ready-to-install, code-signed server packages (`StandaloneLaps-Server-<version>-<timestamp>.zip`, including the Windows and Linux agents) are attached to the [GitHub releases](../../releases). Building from source is only needed for changes.
 
+**Docker alternative (1.5.0):** instead of IIS, the server can run as a container with SQLite or PostgreSQL storage and any OpenID Connect provider (`StandaloneLaps-Container-<version>-<timestamp>.zip`). Same agents, same client packages, same encryption. See [docs/Container.md](docs/Container.md).
+
 ## Architecture
 
 ```text

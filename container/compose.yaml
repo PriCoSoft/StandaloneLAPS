@@ -1,0 +1,40 @@
+# SLAPS container server with SQLite (default). PostgreSQL: add -f compose.postgres.yaml.
+# Before the first start:
+#   1. mkdir secrets && openssl rand -base64 48 > secrets/slaps_master_key.txt
+#      sudo chown 1654 secrets/slaps_master_key.txt && sudo chmod 0400 secrets/slaps_master_key.txt   (1654 = container user "app")
+#      Keep a copy of this master key offline: without it the database cannot be decrypted.
+#   2. Replace the example values below (host name, Entra tenant/client ID, networks).
+#   3. Recommended: mount a TLS certificate that the managed servers already trust (./certs/tls.crt + tls.key).
+#      Without one, the server generates a self-signed certificate that every managed server must trust.
+services:
+  slaps:
+    build:
+      context: ..
+      dockerfile: container/Dockerfile
+    image: slaps-server:1.5.0
+    restart: unless-stopped
+    ports:
+      - "8443:8443"   # portal: allow only from internal admin networks
+      - "8444:8444"   # agent API (client certificates): allow from the managed servers
+    environment:
+      Slaps__PublicUrl: "https://slaps.example.com:8443/"
+      Slaps__AgentApiUrl: "https://slaps.example.com:8444/"
+      Slaps__OidcAuthority: "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"
+      Slaps__OidcClientId: "00000000-0000-0000-0000-000000000000"
+      # Source networks allowed to open the portal (default: private address ranges).
+      Slaps__PortalAllowedNetworks: "10.0.0.0/8;172.16.0.0/12;192.168.0.0/16"
+      SLAPS_MASTER_KEY_FILE: /run/secrets/slaps_master_key
+      # Slaps__TlsCertificatePath: /certs/tls.crt
+      # Slaps__TlsKeyPath: /certs/tls.key
+    secrets:
+      - slaps_master_key
+    volumes:
+      - slaps-data:/data
+      # - ./certs:/certs:ro
+
+secrets:
+  slaps_master_key:
+    file: ./secrets/slaps_master_key.txt
+
+volumes:
+  slaps-data:

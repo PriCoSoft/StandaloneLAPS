@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Integration checks for the container server. Runs on Windows: the agent's own EnvelopeCrypto (BCrypt) is linked
+       in to prove wire-format compatibility with the deployed Windows agent. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);IDE1006;CA1416</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\web\IisVault\App_Code\EnvelopeCrypto.cs" Link="Agent\EnvelopeCrypto.cs" />
+    <Compile Include="..\..\web\IisVault\App_Code\EnvelopeModels.cs" Link="Agent\EnvelopeModels.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\..\src\StandaloneLaps.Server\StandaloneLaps.Server.csproj" />
+  </ItemGroup>
+</Project>

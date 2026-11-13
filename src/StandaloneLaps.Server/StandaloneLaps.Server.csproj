@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- Container backend (Linux/Docker, also runs on Windows): same agent API as web/IisVault, own portal, SQLite or PostgreSQL storage. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>StandaloneLaps.Server</AssemblyName>
+    <RootNamespace>StandaloneLaps.Server</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <GenerateAssemblyVersionAttribute>false</GenerateAssemblyVersionAttribute>
+    <GenerateAssemblyFileVersionAttribute>false</GenerateAssemblyFileVersionAttribute>
+    <GenerateAssemblyInformationalVersionAttribute>false</GenerateAssemblyInformationalVersionAttribute>
+    <Company>PriCoSoft GmbH</Company>
+    <Product>Standalone LAPS (SLAPS) container server</Product>
+    <Copyright>Copyright 2026 PriCoSoft GmbH, Apache-2.0</Copyright>
+    <!-- Lower-case property names keep the JSON wire format identical to the IIS backend and the agents. -->
+    <NoWarn>$(NoWarn);IDE1006</NoWarn>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Single version source shared with the IIS portal and the agent. -->
+    <Compile Include="..\..\web\IisVault\App_Code\AppVersion.cs" Link="AppVersion.cs" />
+    <!-- Same look as the IIS portal: style sheet and icons are linked, not copied. -->
+    <None Include="..\..\web\IisVault\style.css" Link="assets\style.css" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\web\IisVault\icon.svg" Link="assets\icon.svg" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\web\IisVault\favicon.ico" Link="assets\favicon.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\web\IisVault\icon-180.png" Link="assets\icon-180.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.15" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.15" />
+    <PackageReference Include="Npgsql" Version="10.0.3" />
+  </ItemGroup>
+</Project>

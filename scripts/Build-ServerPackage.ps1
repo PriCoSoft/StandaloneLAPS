@@ -5,8 +5,9 @@ param(
     [switch]$SkipSigning,
     [string]$SignCode = 'C:\Program Files (x86)\PriCoSoft\SignCode\signcode.cmd'
 )
-# Builds the agent, runs all checks and creates artifacts\StandaloneLaps-Server-<timestamp>.zip:
+# Builds the agent, runs all checks and creates artifacts\StandaloneLaps-Server-<version>-<timestamp>.zip:
 #   Install-SlapsServer.ps1, website\ (source-only IIS site), agent\ (Framework agent), client\Install-SlapsAgent.ps1, docs\
+# and artifacts\StandaloneLaps-Container-<version>-<timestamp>.zip (Docker alternative to IIS, see docs\Container.md).
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 if ($SkipTests) { & (Join-Path $PSScriptRoot 'Build-FrameworkAgent.ps1') } else { & (Join-Path $PSScriptRoot 'Test-IisBackend.ps1') }
@@ -26,7 +27,7 @@ New-Item -ItemType Directory -Path (Join-Path $stage 'agent'), (Join-Path $stage
 Copy-Item -Path (Join-Path $root 'artifacts\Agent-Net472\*') -Destination (Join-Path $stage 'agent')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Install-SlapsAgent.ps1') -Destination (Join-Path $stage 'client')
 Copy-Item -LiteralPath (Join-Path $root 'artifacts\Agent-Linux') -Destination (Join-Path $stage 'linux') -Recurse
-Copy-Item -LiteralPath (Join-Path $root 'README.md'), (Join-Path $root 'docs\Migration.md') -Destination (Join-Path $stage 'docs')
+Copy-Item -LiteralPath (Join-Path $root 'README.md'), (Join-Path $root 'docs\Migration.md'), (Join-Path $root 'docs\Container.md') -Destination (Join-Path $stage 'docs')
 
 # Sign the staged copies (sources stay unsigned). The website copies agent EXE and Install-SlapsAgent.ps1
 # byte-for-byte into every client package, so the signatures stay valid there.
@@ -135,3 +136,53 @@ Details: docs\README.md and docs\Migration.md
 Set-Content -LiteralPath (Join-Path $stage 'INSTALL.txt') -Encoding UTF8 -Value $installText.Replace('{VERSION}', $version)
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip
 Write-Host "Server package: $zip"
+
+# Container package: published server (framework-dependent, runs in mcr.microsoft.com/dotnet/aspnet:10.0), the signed
+# agent files from the server stage and a runtime-only Dockerfile, so "docker compose up -d --build" needs no SDK.
+$dotnet = (Get-Command dotnet -ErrorAction SilentlyContinue).Source
+if (-not $dotnet) { throw 'The .NET 10 SDK (dotnet) is required to build the container package.' }
+if (-not $SkipTests) {
+    $testOutput = Join-Path $root 'artifacts\verification\server-tests'
+    & $dotnet build (Join-Path $root 'tests\StandaloneLaps.Server.Tests\StandaloneLaps.Server.Tests.csproj') -c Release -o $testOutput --nologo -v quiet
+    if ($LASTEXITCODE -ne 0) { throw 'Building the container server tests failed.' }
+    & $dotnet (Join-Path $testOutput 'StandaloneLaps.Server.Tests.dll')
+    if ($LASTEXITCODE -ne 0) { throw 'Container server tests failed.' }
+}
+$containerName = 'StandaloneLaps-Container-' + $version + '-' + (Get-Date -Format 'yyyyMMdd-HHmm')
+$containerStage = Join-Path $root ('artifacts\' + $containerName)
+New-Item -ItemType Directory -Path $containerStage | Out-Null
+& $dotnet publish (Join-Path $root 'src\StandaloneLaps.Server\StandaloneLaps.Server.csproj') -c Release -o (Join-Path $containerStage 'app') -p:UseAppHost=false --nologo -v quiet
+if ($LASTEXITCODE -ne 0) { throw 'Publishing the container server failed.' }
+Get-ChildItem -LiteralPath (Join-Path $containerStage 'app') -Filter '*.pdb' | Remove-Item
+$agentPackage = Join-Path $containerStage 'agent-package'
+New-Item -ItemType Directory -Path (Join-Path $agentPackage 'linux') -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $stage 'agent\StandaloneLaps.Agent.exe'), (Join-Path $stage 'agent\StandaloneLaps.Agent.exe.config'), (Join-Path $stage 'client\Install-SlapsAgent.ps1') -Destination $agentPackage
+foreach ($file in 'slaps-agent', 'slaps-agent.service', 'agent.conf', 'install.sh') { Copy-Item -LiteralPath (Join-Path $stage ('linux\' + $file)) -Destination (Join-Path $agentPackage 'linux') }
+Copy-Item -LiteralPath (Get-ChildItem -LiteralPath (Join-Path $stage 'linux') -Filter 'slaps-agent_*_all.deb' | Select-Object -First 1).FullName -Destination (Join-Path $agentPackage 'linux\slaps-agent.deb')
+$runtimeDockerfile = @'
+# SLAPS container server {VERSION} (prebuilt). docker compose up -d --build
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
+WORKDIR /app
+COPY app/ ./
+COPY agent-package/ /app/agent-package/
+RUN mkdir -p /data && chown "$APP_UID" /data
+ENV ASPNETCORE_ENVIRONMENT=Production \
+    ASPNETCORE_HTTP_PORTS= \
+    Slaps__DataDirectory=/data \
+    Slaps__AgentPackageDirectory=/app/agent-package
+USER $APP_UID
+VOLUME /data
+EXPOSE 8443 8444
+HEALTHCHECK --interval=60s --timeout=10s --start-period=60s CMD ["dotnet", "StandaloneLaps.Server.dll", "health"]
+ENTRYPOINT ["dotnet", "StandaloneLaps.Server.dll"]
+'@
+Set-Content -LiteralPath (Join-Path $containerStage 'Dockerfile') -Value $runtimeDockerfile.Replace('{VERSION}', $version) -Encoding UTF8
+$compose = Get-Content -LiteralPath (Join-Path $root 'container\compose.yaml') -Raw
+if ($compose -notmatch ('slaps-server:' + [regex]::Escape($version))) { throw "container\compose.yaml must use the image tag slaps-server:$version." }
+$compose = [regex]::Replace($compose, '(?m)^    build:\r?\n      context: \.\.\r?\n      dockerfile: container/Dockerfile\r?\n', "    build: .`n")
+if ($compose -match 'container/Dockerfile') { throw 'Could not rewrite the build section of compose.yaml.' }
+Set-Content -LiteralPath (Join-Path $containerStage 'compose.yaml') -Value $compose -Encoding UTF8
+Copy-Item -LiteralPath (Join-Path $root 'container\compose.postgres.yaml'), (Join-Path $root 'docs\Container.md'), (Join-Path $root 'LICENSE'), (Join-Path $root 'NOTICE') -Destination $containerStage
+$containerZip = $containerStage + $(if ($SkipSigning) { '-UNSIGNED.zip' } else { '.zip' })
+Compress-Archive -Path (Join-Path $containerStage '*') -DestinationPath $containerZip
+Write-Host "Container package: $containerZip"

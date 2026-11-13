@@ -1,3 +1,5 @@
 <Solution>
   <Project Path="src/StandaloneLaps.Agent.Framework/StandaloneLaps.Agent.Framework.csproj" />
+  <Project Path="src/StandaloneLaps.Server/StandaloneLaps.Server.csproj" />
+  <Project Path="tests/StandaloneLaps.Server.Tests/StandaloneLaps.Server.Tests.csproj" />
 </Solution>

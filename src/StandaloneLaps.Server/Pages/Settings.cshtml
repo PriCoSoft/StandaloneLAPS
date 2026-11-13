@@ -1,0 +1,76 @@
+@page "/settings"
+@model SettingsModel
+@{
+    ViewData["Title"] = "Settings";
+    var identity = Model.Identity;
+    var options = Model.Options;
+}
+<main class="content">
+<div class="breadcrumbs">SLAPS <span>/</span> Settings</div>
+<div class="page-heading"><div><p class="eyebrow">CONFIGURATION</p><h1>Settings</h1><p class="subtitle">Password history retention, SLAPS certificates and version information.</p></div><span class="role-label">@(identity.IsAdmin ? "Manage access" : "Read access")</span></div>
+
+<section class="form-card settings-card">
+<h2 class="card-title">Password history</h2>
+<p class="helper">Number of password versions kept per device. The newest versions are kept; the most recent version reported as applied is always kept as well.</p>
+@if (!string.IsNullOrEmpty(Model.ErrorText)) {<p class="notice danger">@Model.ErrorText</p>}
+@if (!string.IsNullOrEmpty(Model.SavedText)) {<p class="notice success">@Model.SavedText</p>}
+@if (identity.IsAdmin)
+{
+<form method="post">
+<label class="field-label" for="historyLimit">Versions per device (@ServerOptions.MinHistoryLimit–@ServerOptions.MaxHistoryLimit)</label>
+<input class="text-input number-input" id="historyLimit" name="historyLimit" type="number" min="@ServerOptions.MinHistoryLimit" max="@ServerOptions.MaxHistoryLimit" value="@Model.FieldValue" required />
+<label class="checkbox"><input type="checkbox" name="confirmTrim" value="yes" />When lowering: permanently delete versions above the new limit on all devices.</label>
+<div class="form-actions"><button class="button" type="submit" name="action" value="history-limit">Save</button></div>
+</form>
+}
+else
+{
+<dl class="summary-list"><dt>Versions per device</dt><dd>@Model.Current.HistoryLimit</dd></dl>
+}
+<p class="helper">@(Model.Current.UpdatedUtc == null ? $"Default value ({ServerOptions.DefaultHistoryLimit}), not changed yet." : $"Last changed {Wire.Timestamp(Model.Current.UpdatedUtc).UtcDateTime:yyyy-MM-dd HH:mm} UTC by {Model.Current.UpdatedBy}.") Deleted devices keep their history until they are restored.</p>
+</section>
+
+<section class="form-card settings-card">
+<h2 class="card-title">Certificates</h2>
+<p class="helper">Public certificates can be downloaded, e.g. to trust the TLS certificate on managed servers. Private keys never leave the server through the portal.</p>
+@foreach (var certificate in Model.Certificates)
+{
+<div class="certificate">
+<div class="certificate-head"><h3>@certificate.Role</h3>@if (certificate.Expired) {<span class="badge warning"><span></span>Expired</span>} else {<span class="badge success"><span></span>Valid</span>}</div>
+<p class="helper tight">@certificate.Purpose</p>
+<dl>
+<dt>Subject</dt><dd>@certificate.Subject</dd>
+<dt>Issuer</dt><dd>@certificate.Issuer</dd>
+<dt>Valid from</dt><dd>@PortalPage.Day(certificate.NotBeforeUtc)</dd>
+<dt>Valid until</dt><dd>@PortalPage.Day(certificate.NotAfterUtc)</dd>
+<dt>Key</dt><dd>@certificate.KeyDescription</dd>
+<dt>Private key</dt><dd>@certificate.KeyStatus</dd>
+<dt>Serial number</dt><dd class="mono">@certificate.SerialNumber</dd>
+<dt>Thumbprint (SHA-1)</dt><dd class="mono fingerprint">@certificate.Thumbprint</dd>
+<dt>SHA-256</dt><dd class="mono fingerprint">@certificate.Sha256</dd>
+</dl>
+<div class="form-actions"><a class="button secondary" href="certificate?sha=@certificate.Sha256&amp;format=cer">Download .cer (DER)</a><a class="button secondary" href="certificate?sha=@certificate.Sha256&amp;format=pem">Download .pem</a></div>
+</div>
+}
+</section>
+
+<section class="form-card settings-card">
+<h2 class="card-title">About</h2>
+<dl class="summary-list">
+<dt>SLAPS server version</dt><dd>@StandaloneLapsWeb.AppVersion.Number (container)</dd>
+<dt>Agent in client packages</dt><dd>@Model.AgentVersion</dd>
+<dt>Sign-in</dt><dd>@(options.DevelopmentAuth ? "Development (loopback only)" : "OpenID Connect, roles " + options.AdminRole + " / " + options.ReaderRole)</dd>
+<dt>Password reveal in browser</dt><dd>@(options.EnableWebDecryption ? "Enabled" : "Disabled")</dd>
+<dt>Database</dt><dd>@(Model.Store.IsPostgres ? "PostgreSQL" : "SQLite")</dd>
+@if (identity.IsAdmin)
+{
+<dt>Portal URL</dt><dd class="mono">@options.PublicUrl</dd>
+<dt>Agent API URL</dt><dd class="mono">@options.AgentApiUrl</dd>
+<dt>Portal networks</dt><dd class="mono">@string.Join("; ", options.PortalAllowedNetworks.Select(n => n.ToString()))</dd>
+<dt>.NET runtime</dt><dd>@Environment.Version</dd>
+}
+</dl>
+<p class="helper">Server settings come from environment variables (Slaps__*) of the container; change them in compose.yaml and restart.</p>
+</section>
+<p class="identity">Signed in as @identity.DisplayName · @identity.Actor</p>
+</main>

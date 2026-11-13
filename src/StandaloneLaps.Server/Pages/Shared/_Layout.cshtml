@@ -1,0 +1,23 @@
+@{
+    var portal = (PortalPage)ViewContext.ViewData.Model;
+    var identity = portal.Identity;
+}
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>@ViewData["Title"] · PriCoSoft SLAPS</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml" /><link rel="alternate icon" href="favicon.ico" sizes="16x16 32x32 48x48" /><link rel="apple-touch-icon" href="icon-180.png" /><link rel="stylesheet" href="style.css" /></head>
+<body>
+<header class="topbar"><a class="brand" href="./"><img class="brand-icon" src="icon.svg" alt="" width="32" height="32" /><span>PriCoSoft <strong>SLAPS</strong></span></a>
+<span class="topbar-context">Standalone password management</span>
+<span class="profile"><span class="avatar">@(identity.IsAdmin ? "A" : "R")</span><span class="profile-text">@identity.DisplayName<small>@(identity.IsAdmin ? "Administrator" : "Reader")</small></span>@if (!portal.Options.DevelopmentAuth) {<a class="signout" href="signout">Sign out</a>}</span></header>
+<div class="shell">
+<aside class="navigation"><p class="nav-label">MANAGE</p>
+<a class="nav-item @(portal.Active == "devices" ? "active" : "")" href="./"><span class="nav-icon">&#9636;</span>Devices</a>
+@if (identity.IsAdmin)
+{
+<a class="nav-item @(portal.Active == "add" ? "active" : "")" href="addclient"><span class="nav-icon">&#65291;</span>Add client</a>
+<a class="nav-item @(portal.Active == "deleted" ? "active" : "")" href="./?view=deleted"><span class="nav-icon">&#8634;</span>Deleted devices</a>
+}
+<a class="nav-item @(portal.Active == "settings" ? "active" : "")" href="settings"><span class="nav-icon">&#9881;</span>Settings</a>
+<div class="nav-bottom"><span class="security-dot"></span>Encrypted vault<small>@portal.Limit versions per device</small><small class="version">Version @StandaloneLapsWeb.AppVersion.Number · container</small></div></aside>
+@RenderBody()
+</div></body></html>

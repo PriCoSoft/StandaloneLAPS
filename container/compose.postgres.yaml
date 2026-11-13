@@ -1,0 +1,42 @@
+# PostgreSQL instead of SQLite:
+#   docker compose -f compose.yaml -f compose.postgres.yaml up -d
+# Secrets (same password in both files; slaps_db_connection.txt owned by uid 1654, postgres_password.txt by uid 999):
+#   secrets/postgres_password.txt          the password only
+#   secrets/slaps_db_connection.txt        Host=postgres;Database=slaps;Username=slaps;Password=<same password>
+services:
+  slaps:
+    environment:
+      Slaps__DatabaseProvider: postgresql
+      Slaps__ConnectionStringFile: /run/secrets/slaps_db_connection
+    secrets:
+      - slaps_master_key
+      - slaps_db_connection
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: slaps
+      POSTGRES_USER: slaps
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - slaps-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U slaps -d slaps"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+secrets:
+  slaps_db_connection:
+    file: ./secrets/slaps_db_connection.txt
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+
+volumes:
+  slaps-postgres:

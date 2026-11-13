@@ -1,0 +1,54 @@
+@page "/addclient"
+@model AddClientModel
+@{
+    ViewData["Title"] = Model.Existing == null ? "Add client" : "New certificate package";
+}
+<main class="content">
+<div class="breadcrumbs">SLAPS <span>/</span> <a href="./">Devices</a> <span>/</span> @ViewData["Title"]</div>
+<div class="page-heading"><div><p class="eyebrow">CLIENT DEPLOYMENT</p><h1>@ViewData["Title"]</h1><p class="subtitle">The server issues an agent certificate from its SLAPS CA and builds an installation package with all settings predefined.</p></div></div>
+@if (Model.Result == null)
+{
+<section class="form-card">
+@if (!string.IsNullOrEmpty(Model.ErrorText)) {<p class="notice danger">@Model.ErrorText</p>}
+@if (Model.MissingWindows != null) {<p class="notice danger">Agent files are missing in @Model.Options.AgentPackageDirectory: @Model.MissingWindows. Use the container image built from the release package.</p>}
+<form method="post">
+@if (Model.Existing == null)
+{
+<label class="field-label" for="name">Device name</label>
+<input class="text-input" id="name" name="name" value="@Model.NameValue" maxlength="64" pattern="[A-Za-z0-9 ._\-]{1,64}" required autocomplete="off" placeholder="e.g. DMZ-WEB-01" />
+<p class="helper">Use the server's computer name. Letters, digits, spaces, dots, dashes and underscores; up to 64 characters.</p>
+}
+else
+{
+<section class="notice"><h3>@Model.Existing.DisplayName</h3><p>A new agent certificate replaces the current one immediately. The old package stops working; install the new package on this server. History and device ID stay unchanged.</p><p class="mono">@Model.Existing.DeviceId</p></section>
+}
+<fieldset class="platform-choice"><legend class="field-label">Operating system</legend>
+<label class="checkbox"><input type="radio" name="platform" value="windows" checked="@(!Model.IsLinux)" /> Windows Server <span class="helper">service, password rules from local policy System &gt; LAPS</span></label>
+<label class="checkbox"><input type="radio" name="platform" value="linux" checked="@Model.IsLinux" /> Linux (systemd) <span class="helper">.deb for Debian/Ubuntu, install.sh for other distributions; rules in /etc/slaps/agent.conf</span></label>
+</fieldset>
+<dl class="summary-list"><dt>Certificate</dt><dd>RSA 3072, Client Authentication, valid for 30 years, issued by the SLAPS CA</dd><dt>Agent API</dt><dd class="mono">@Model.Options.AgentApiUrl</dd><dt>Package</dt><dd>ZIP with installer, agent, PFX and recovery certificate; downloadable for 24 hours</dd></dl>
+<div class="form-actions"><button class="button" type="submit">@(Model.Existing == null ? "Create client and package" : "Issue new certificate")</button><a href="./">Cancel</a></div>
+</form>
+</section>
+}
+else
+{
+var result = Model.Result;
+<section class="form-card">
+<h2 class="card-title">Package ready for @result.Client.DisplayName</h2>
+<div class="secret"><strong>PFX password · shown only once</strong><code>@result.Client.PfxPassword</code><p>Store it in your password manager now. The installer asks for it; it is not saved on the server.</p></div>
+<div class="form-actions"><a class="button" href="package?id=@result.Package.Token">Download @result.Package.FileName</a><a href="./?device=@result.Client.DeviceId&amp;tab=overview">Open device</a></div>
+<dl class="summary-list"><dt>Device ID</dt><dd class="mono">@result.Client.DeviceId</dd><dt>Certificate SHA-256</dt><dd class="mono fingerprint">@result.Client.CertificateSha256</dd><dt>Valid until</dt><dd>@result.Client.NotAfterUtc.ToString("yyyy-MM-dd") UTC</dd><dt>Download expires</dt><dd>@Wire.Timestamp(result.Package.ExpiresUtc).UtcDateTime.ToString("yyyy-MM-dd HH:mm") UTC</dd></dl>
+<h3 class="card-subtitle">Install on the server</h3>
+@if (Model.IsLinux)
+{
+<ol class="steps"><li>Copy the ZIP to the server and extract it, e.g. <span class="mono">python3 -m zipfile -e @result.Package.FileName .</span></li><li>In the extracted folder run <span class="mono">sudo sh install.sh</span> and enter the PFX password.</li><li>The installer installs the agent (.deb on Debian/Ubuntu), imports the certificate, tests the connection to this server and starts the <span class="mono">slaps-agent</span> service.</li><li>Delete the extracted folder and the ZIP afterwards.</li></ol>
+}
+else
+{
+<ol class="steps"><li>Copy the ZIP to the server and extract it.</li><li>Right-click <strong>Install.cmd</strong> &gt; <em>Run as administrator</em> and enter the PFX password.</li><li>The installer imports the certificate, installs and configures the service, tests the connection to this server and starts the agent.</li><li>Delete the extracted folder and the ZIP afterwards.</li></ol>
+}
+<p class="helper">The managed server must trust the TLS certificate of this SLAPS server (if the container generated it, download it under Settings &gt; Certificates).</p>
+</section>
+}
+</main>

@@ -1,0 +1,23 @@
+@page "/denied"
+@{
+    Layout = null;
+    var signedOut = Request.Query["signedout"] == "1";
+}
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>@(signedOut ? "Signed out" : "Access denied") · PriCoSoft SLAPS</title><link rel="icon" href="icon.svg" type="image/svg+xml" /><link rel="stylesheet" href="style.css" /></head>
+<body>
+<main class="content">
+<section class="form-card">
+<h1>@(signedOut ? "Signed out" : "Access denied")</h1>
+@if (signedOut)
+{
+<p>You have been signed out of the SLAPS portal.</p>
+}
+else
+{
+<p>Your account has no SLAPS role. Ask an administrator to assign the role SLAPS.Admin or SLAPS.Reader to you.</p>
+}
+<div class="form-actions"><a class="button" href="./">Sign in</a></div>
+</section>
+</main>
+</body></html>
