@@ -25,11 +25,18 @@ namespace StandaloneLaps.FrameworkAgent
                 if (Number(settings, "Enabled", 0) == 0) return null;
                 foreach (var path in new[] { @"SOFTWARE\Microsoft\Policies\LAPS", @"SOFTWARE\Microsoft\Windows\CurrentVersion\LAPS\Config" })
                     if (Number(Values(registry, path), "BackupDirectory", 0) != 0) throw new InvalidOperationException("Competing native LAPS backup is enabled.");
-                if (Number(Values(registry, @"SOFTWARE\Policies\Microsoft Services\AdmPwd"), "AdmPwdEnabled", 0) != 0)
-                    throw new InvalidOperationException("Legacy LAPS is enabled.");
+                // AdmPwdEnabled alone is the "LAPS enabled" signal the SLAPS installer sets; it only competes when the
+                // legacy Microsoft LAPS client-side extension (AdmPwd.dll) is actually installed.
+                bool cseInstalled;
+                using (var cse = registry.OpenSubKey(LegacyExtensionPath)) cseInstalled = cse != null;
+                if (LegacyLapsCompetes(Number(Values(registry, LegacyPath), "AdmPwdEnabled", 0) != 0, cseInstalled))
+                    throw new InvalidOperationException("Legacy Microsoft LAPS (AdmPwd client-side extension) is installed and enabled.");
                 return FromValues(settings, Values(registry, LapsPath));
             }
         }
+        public const string LegacyPath = @"SOFTWARE\Policies\Microsoft Services\AdmPwd";
+        public const string LegacyExtensionPath = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\GPExtensions\{D76B9641-3288-4f75-942D-087DE603E3EA}";
+        public static bool LegacyLapsCompetes(bool admPwdEnabled, bool extensionInstalled) { return admPwdEnabled && extensionInstalled; }
         private static IDictionary<string, object> Values(RegistryKey root, string path)
         {
             using (var key = root.OpenSubKey(path)) return key == null ? new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)

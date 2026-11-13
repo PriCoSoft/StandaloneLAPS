@@ -100,6 +100,23 @@ public static class FrameworkAgentTests
         check(Program.DescribeFailure(new InvalidOperationException("Native BackupDirectory must be Disabled (0).")) == "InvalidOperationException: Native BackupDirectory must be Disabled (0).", "event log names the reason of agent errors");
         check(Program.DescribeFailure(new System.Net.WebException("x", System.Net.WebExceptionStatus.ConnectFailure)) == "WebException: ConnectFailure", "event log names the network failure status");
         check(Program.DescribeFailure(new ArgumentException("secret-bearing text")) == "ArgumentException", "unlisted exception types are logged by name only");
+        // Windows LAPS compatibility (standalone servers) and refusal on joined devices.
+        check(WindowsLapsCompatibility.Rid("S-1-5-21-111-222-333-500") == 500 && WindowsLapsCompatibility.Rid("S-1-5-21-1-2-3-1001") == 1001, "managed account RID taken from the SID");
+        fails(() => WindowsLapsCompatibility.Rid("not-a-sid"), "invalid SID rejected for the LAPS state");
+        var updated = new DateTimeOffset(2026, 11, 12, 20, 0, 0, TimeSpan.Zero);
+        var stateValues = WindowsLapsCompatibility.StateValues("S-1-5-21-111-222-333-500", updated).ToDictionary(v => (string)v[0], v => v);
+        check(stateValues.Count == 5 && (long)stateValues["LastPasswordUpdateTime"][1] == updated.UtcDateTime.ToFileTimeUtc() &&
+              (Microsoft.Win32.RegistryValueKind)stateValues["LastPasswordUpdateTime"][2] == Microsoft.Win32.RegistryValueKind.QWord &&
+              (int)stateValues["LastManagedAccountRid"][1] == 500 && (int)stateValues["DSRMMode"][1] == 0, "LAPS state uses Windows LAPS value names, FILETIME QWORD and RID");
+        check(WindowsLapsCompatibility.ProviderId == new Guid("4fcc72a9-d7ca-5dd2-8d34-6f41a0cdb7e0") && WindowsLapsCompatibility.StatePath == @"SOFTWARE\Microsoft\Windows\CurrentVersion\LAPS\State", "Windows LAPS provider and state key");
+        var eventData = WindowsLapsCompatibility.PolicyEventData(policy);
+        check(eventData.Length == 13 && (string)eventData[1] == WindowsLapsCompatibility.BackupDirectoryText && eventData[3] is int && (int)eventData[5] == policy.Length &&
+              eventData.Take(3).All(v => v is string) && eventData[9] is string && eventData[10] is string, "event 10022 payload matches the Windows LAPS template (13 fields, types)");
+        check(DeviceJoin.RefusalMessage(DeviceJoinType.ActiveDirectory).Contains(DeviceJoin.WindowsLapsActiveDirectory) && DeviceJoin.RefusalMessage(DeviceJoinType.EntraId).Contains(DeviceJoin.WindowsLapsEntraId) &&
+              DeviceJoin.RefusalMessage(DeviceJoinType.EntraId).Contains("Microsoft Entra ID") && DeviceJoin.RefusalMessage(DeviceJoinType.ActiveDirectory).Contains("makes no changes"), "joined devices are refused with a link to the matching Windows LAPS guide");
+        check(!AgentPolicy.LegacyLapsCompetes(true, false) && AgentPolicy.LegacyLapsCompetes(true, true) && !AgentPolicy.LegacyLapsCompetes(false, true), "AdmPwdEnabled signal accepted unless the legacy LAPS extension is installed");
+        var join = DeviceJoin.Detect();
+        check(Enum.IsDefined(typeof(DeviceJoinType), join), "join state of this machine readable (" + join + ")");
         return passed;
     }
     private sealed class FakeAccounts : IAccountManager

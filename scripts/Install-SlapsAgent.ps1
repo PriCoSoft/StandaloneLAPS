@@ -30,6 +30,9 @@ $ServiceName = 'StandaloneLapsAgent'
 $SettingsKeyPath = 'SOFTWARE\PriCoSoft\SLAPS'
 $DataDirectory = Join-Path $env:ProgramData 'StandaloneLaps'
 $LapsPolicyPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\LAPS'
+$LegacyPolicyPath = 'SOFTWARE\Policies\Microsoft Services\AdmPwd'
+$LegacyExtensionPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\GPExtensions\{D76B9641-3288-4f75-942D-087DE603E3EA}'
+$LapsStatePath = 'SOFTWARE\Microsoft\Windows\CurrentVersion\LAPS\State'
 
 function Write-Step([string]$Text) { Write-Host ('==> ' + $Text) -ForegroundColor Cyan }
 function Get-Sha256([byte[]]$Raw) {
@@ -65,6 +68,37 @@ function Stop-AgentService {
     if ($service -and $service.Status -ne 'Stopped') { Stop-Service -Name $ServiceName -Force; $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(60)) }
     return $service
 }
+function Get-JoinedDirectory {
+    # SLAPS is for standalone servers only; joined devices must use Windows LAPS.
+    if ((Get-CimInstance Win32_ComputerSystem).PartOfDomain) { return @('Active Directory', 'https://learn.microsoft.com/windows-server/identity/laps/laps-scenarios-windows-server-active-directory') }
+    $dsreg = & dsregcmd.exe /status 2>$null
+    if ($dsreg -match '^\s*AzureAdJoined\s*:\s*YES') { return @('Microsoft Entra ID', 'https://learn.microsoft.com/windows-server/identity/laps/laps-scenarios-azure-active-directory') }
+    return $null
+}
+function Remove-LapsSignal {
+    # Removes what this installer and the agent wrote to signal LAPS management (legacy AdmPwdEnabled, Windows LAPS state values).
+    $base = Open-Hklm64
+    try {
+        $marker = $null
+        $key = $base.OpenSubKey($SettingsKeyPath)
+        if ($key) { try { $marker = $key.GetValue('LegacyLapsSignal', $null) } finally { $key.Dispose() } }
+        if ($marker -eq 1) {
+            $legacy = $base.OpenSubKey($LegacyPolicyPath, $true)
+            if ($legacy) {
+                try { $legacy.DeleteValue('AdmPwdEnabled', $false); $empty = $legacy.ValueCount -eq 0 -and $legacy.SubKeyCount -eq 0 } finally { $legacy.Dispose() }
+                if ($empty) { $base.DeleteSubKey($LegacyPolicyPath, $false) }
+                Write-Host '    Legacy LAPS signal (AdmPwdEnabled) removed.'
+            }
+        }
+        if (-not (Get-JoinedDirectory)) {
+            $state = $base.OpenSubKey($LapsStatePath, $true)
+            if ($state) {
+                try { foreach ($name in 'PolicySource', 'DSRMMode', 'LastManagedAccountRid', 'LastAccountRidUpdated', 'LastPasswordUpdateTime') { $state.DeleteValue($name, $false) } } finally { $state.Dispose() }
+                Write-Host '    Windows LAPS compatible state values removed.'
+            }
+        }
+    } finally { $base.Dispose() }
+}
 function Invoke-ApiProbe([string]$Method, [string]$Uri, $Certificate, [string]$Body) {
     try {
         $parameters = @{ Uri = $Uri; Method = $Method; Certificate = $Certificate; UseBasicParsing = $true; MaximumRedirection = 0; TimeoutSec = 30 }
@@ -82,6 +116,7 @@ if ($Uninstall) {
     Write-Step 'Removing the SLAPS agent'
     $previousSha = Get-ConfiguredCertificateSha
     if (Stop-AgentService) { & sc.exe delete $ServiceName | Out-Null; Write-Host '    Service removed.' }
+    Remove-LapsSignal
     $base = Open-Hklm64
     try { if ($base.OpenSubKey($SettingsKeyPath)) { $base.DeleteSubKeyTree($SettingsKeyPath); Write-Host '    Registry settings removed.' } } finally { $base.Dispose() }
     if (-not $KeepCertificate) { Remove-MachineCertificate $previousSha }
@@ -115,6 +150,10 @@ if (-not [Environment]::Is64BitOperatingSystem) { throw 'A 64-bit Windows Server
 $release = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full' -ErrorAction SilentlyContinue).Release
 if (-not $release -or $release -lt 461808) { throw '.NET Framework 4.7.2 or later is required (included in Windows Server 2019).' }
 if ((Get-CimInstance Win32_OperatingSystem).ProductType -eq 2) { throw 'Domain controllers are not supported.' }
+$joined = Get-JoinedDirectory
+if ($joined) { throw ("This computer is joined to {0}. Standalone LAPS is only for standalone (workgroup) servers; nothing was installed. Use Windows LAPS with password backup to {0} instead: {1} (overview: https://learn.microsoft.com/windows-server/identity/laps/laps-overview)" -f $joined[0], $joined[1]) }
+Write-Host '    Standalone server (not joined to Active Directory or Microsoft Entra ID).'
+if ((Test-Path -LiteralPath $LegacyExtensionPath) -and (Get-ItemProperty -Path ('HKLM:\' + $LegacyPolicyPath) -ErrorAction SilentlyContinue).AdmPwdEnabled -eq 1) { throw 'Legacy Microsoft LAPS (AdmPwd client-side extension) is installed and enabled. Uninstall it first.' }
 $policy = Get-ItemProperty -Path $LapsPolicyPath -ErrorAction SilentlyContinue
 function Get-PolicyValue([string]$Name, $Default) { if ($policy -and $null -ne $policy.$Name) { return $policy.$Name } return $Default }
 if ((Get-PolicyValue 'BackupDirectory' 0) -ne 0) { throw 'System > LAPS "Configure password backup directory" must be Disabled (BackupDirectory=0). SLAPS backs up to its own server.' }
@@ -192,8 +231,17 @@ try {
         $key.SetValue('Enabled', 0, [Microsoft.Win32.RegistryValueKind]::DWord)
         $values = [ordered]@{ DeviceId = $deviceId.ToString('D'); ApiUrl = $api.AbsoluteUri; ClientCertificateSha256 = $clientSha; RecoveryCertificatePath = $recoveryPath; RecoveryCertificateSha256 = $recoverySha }
         foreach ($entry in $values.GetEnumerator()) { $key.SetValue($entry.Key, $entry.Value, [Microsoft.Win32.RegistryValueKind]::String) }
+        $key.SetValue('LegacyLapsSignal', [int][bool]$policy, [Microsoft.Win32.RegistryValueKind]::DWord)
         $key.SetValue('Enabled', 1, [Microsoft.Win32.RegistryValueKind]::DWord)
     } finally { $key.Dispose() }
+    # "LAPS enabled" signal for inventory/compliance tools (legacy policy value). Windows LAPS ignores it while the
+    # System > LAPS policy has settings, and the legacy client-side extension is not installed (checked above).
+    # Without System > LAPS settings Windows LAPS would fall back to the legacy policy, so it is not set then.
+    if ($policy) {
+        $legacy = $base.CreateSubKey($LegacyPolicyPath)
+        try { $legacy.SetValue('AdmPwdEnabled', 1, [Microsoft.Win32.RegistryValueKind]::DWord) } finally { $legacy.Dispose() }
+        Write-Host '    LAPS signal: AdmPwdEnabled=1 (legacy policy value; agent also maintains the Windows LAPS state and log).'
+    } else { Write-Warning 'No System > LAPS policy settings found: the legacy AdmPwdEnabled signal was not set. Configure System > LAPS and rerun the installer.' }
 } finally { $base.Dispose() }
 if ($previousSha -and $previousSha -ne $clientSha -and -not $KeepCertificate) { Write-Host '    Removing the superseded agent certificate.'; Remove-MachineCertificate $previousSha }
 
@@ -228,4 +276,4 @@ if (-not $NoStart) {
 Write-Host ''
 if ($connectivityOk) { Write-Host 'Installation complete.' -ForegroundColor Green } else { Write-Host 'Installation complete, but the connection test failed (see warning). The agent retries every five minutes; no password is changed before a verified backup.' -ForegroundColor Yellow }
 Write-Host 'Delete this package folder and ZIP now: agent.pfx contains the agent private key.'
-Write-Host 'Events: Event Viewer > Windows Logs > Application, source StandaloneLapsAgent.'
+Write-Host 'Events: Event Viewer > Windows Logs > Application, source StandaloneLapsAgent; processing summary like Windows LAPS in Applications and Services Logs > Microsoft > Windows > LAPS > Operational.'

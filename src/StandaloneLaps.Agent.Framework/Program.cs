@@ -21,9 +21,12 @@ namespace StandaloneLaps.FrameworkAgent
             {
                 try
                 {
+                    var join = DeviceJoin.Detect();
+                    if (join != DeviceJoinType.None) { Console.Error.WriteLine(DeviceJoin.RefusalMessage(join)); return 1; }
                     var policy = AgentPolicy.Read();
                     if (policy == null) { Console.WriteLine("Agent is disabled (Enabled=0 or absent)."); return 0; }
                     Console.WriteLine("Registry settings and native LAPS policy are valid. No password was changed.");
+                    Console.WriteLine("  Device:               standalone (not joined to Active Directory or Microsoft Entra ID)");
                     Console.WriteLine("  Account:              " + (policy.AccountName ?? "built-in administrator (RID 500)"));
                     Console.WriteLine("  Password:             " + policy.Length + " characters, complexity " + policy.Complexity + ", rotated every " + policy.AgeDays + " days");
                     Console.WriteLine("  Post-authentication:  " + (policy.PostAuthenticationResetDelayHours == 0 ? "disabled (grace period 0)" :
@@ -110,6 +113,26 @@ namespace StandaloneLaps.FrameworkAgent
             // The installer provisions this source. Never let logging expose a provider's secret-bearing exception text.
             try { EventLog.WriteEntry("StandaloneLapsAgent", message, type, id); } catch { }
         }
+        // Windows LAPS compatible state (registry) for the account SLAPS manages; never fails the rotation cycle.
+        private static void UpdateLapsState(StateStore state, LocalAccount account)
+        {
+            try
+            {
+                var saved = state.Read();
+                if (saved != null && saved.AccountSid == account.Sid)
+                    WindowsLapsCompatibility.WriteState(account.Sid, DateTimeOffset.Parse(saved.LastAppliedUtc, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None));
+            }
+            catch (Exception ex) { Log("Windows LAPS compatible state could not be written (" + Program.DescribeFailure(ex) + ").", EventLogEntryType.Warning, 1006); }
+        }
+        private static void WriteLapsCycle(AgentPolicy policy, LocalAccount account, bool rotated, Exception error)
+        {
+            try
+            {
+                using (var writer = new LapsEventWriter())
+                    writer.WriteCycle(policy, account == null ? string.Empty : account.Name, account == null ? "S-1-5-0" : account.Sid, rotated && account != null, error);
+            }
+            catch { }
+        }
         private static void Run(CancellationToken token)
         {
             using (var singleton = new Semaphore(1, 1, @"Global\StandaloneLapsAgentRotation"))
@@ -118,13 +141,25 @@ namespace StandaloneLaps.FrameworkAgent
                 try
                 {
                     DateTimeOffset? announced = null; // pending post-authentication deadline already written to the event log
+                    DateTimeOffset? refused = null, lapsCycle = null; // last join refusal / last Windows LAPS compatible event cycle
                     while (!token.IsCancellationRequested)
                     {
+                        AgentPolicy compatible = null; LocalAccount managed = null; var rotated = false;
                         try
                         {
                             var policy = AgentPolicy.Read();
+                            var join = policy == null ? DeviceJoinType.None : DeviceJoin.Detect();
+                            if (join != DeviceJoinType.None)
+                            {
+                                // Joined devices belong to Windows LAPS: change nothing, say so at start and once a day.
+                                if (!refused.HasValue || DateTimeOffset.UtcNow - refused.Value >= TimeSpan.FromDays(1))
+                                { refused = DateTimeOffset.UtcNow; Log(DeviceJoin.RefusalMessage(join), EventLogEntryType.Error, 1005); }
+                                policy = null;
+                            }
+                            else refused = null;
                             if (policy != null)
                             {
+                                compatible = policy;
                                 using (var recipient = new X509Certificate2(policy.RecoveryCertificatePath))
                                 using (var store = new X509Store(StoreName.My, StoreLocation.LocalMachine))
                                 {
@@ -134,8 +169,12 @@ namespace StandaloneLaps.FrameworkAgent
                                     {
                                         if (client == null) throw new CryptographicException("Client certificate not found.");
                                         var state = new StateStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "StandaloneLaps"));
-                                        var engine = new RotationEngine(new WindowsAccountManager(policy.AccountName), state, new ApiBackupClient(policy, client), new WindowsSessionController());
-                                        if (engine.RotateIfDue(policy, recipient, DateTimeOffset.UtcNow, token))
+                                        var accounts = new WindowsAccountManager(policy.AccountName);
+                                        managed = accounts.Resolve();
+                                        var engine = new RotationEngine(accounts, state, new ApiBackupClient(policy, client), new WindowsSessionController());
+                                        rotated = engine.RotateIfDue(policy, recipient, DateTimeOffset.UtcNow, token);
+                                        UpdateLapsState(state, managed);
+                                        if (rotated)
                                         {
                                             announced = null;
                                             if (engine.LastReason == RotationReason.PostAuthentication)
@@ -155,7 +194,19 @@ namespace StandaloneLaps.FrameworkAgent
                                 }
                             }
                         }
-                        catch (Exception ex) { if (!token.IsCancellationRequested) Log("Rotation cycle failed (" + Program.DescribeFailure(ex) + "). Retry in five minutes; inspect unconfirmed backup candidates.", EventLogEntryType.Error, 1001); }
+                        catch (Exception ex)
+                        {
+                            if (!token.IsCancellationRequested)
+                            {
+                                Log("Rotation cycle failed (" + Program.DescribeFailure(ex) + "). Retry in five minutes; inspect unconfirmed backup candidates.", EventLogEntryType.Error, 1001);
+                                if (compatible != null && (!lapsCycle.HasValue || DateTimeOffset.UtcNow - lapsCycle.Value >= TimeSpan.FromHours(1)))
+                                { lapsCycle = DateTimeOffset.UtcNow; WriteLapsCycle(compatible, managed, false, ex); }
+                            }
+                            compatible = null;
+                        }
+                        // Like Windows LAPS: one processing cycle in its log per hour, plus immediately after a password change.
+                        if (compatible != null && (rotated || !lapsCycle.HasValue || DateTimeOffset.UtcNow - lapsCycle.Value >= TimeSpan.FromHours(1)))
+                        { lapsCycle = DateTimeOffset.UtcNow; WriteLapsCycle(compatible, managed, rotated, null); }
                         if (token.WaitHandle.WaitOne(TimeSpan.FromMinutes(5))) break;
                     }
                 }

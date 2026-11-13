@@ -93,15 +93,26 @@ Package contents: `Install.cmd`, `Install-SlapsAgent.ps1`, `slaps-settings.json`
 
 On the DMZ server, extract the ZIP, right-click **Install.cmd > Run as administrator** and enter the PFX password. `Install-SlapsAgent.ps1`
 
-- checks 64-bit Windows, .NET Framework 4.7.2+, not a domain controller, and the System > LAPS policy (BackupDirectory must be Disabled; automatic account management, post-authentication actions and complexity 5–8 are unsupported),
+- checks 64-bit Windows, .NET Framework 4.7.2+, not a domain controller, **not joined to Active Directory or Microsoft Entra ID** (refuses with a link to the matching Windows LAPS guide), no installed legacy Microsoft LAPS extension, and the System > LAPS policy (BackupDirectory must be Disabled; automatic account management and complexity 5–8 are unsupported),
 - imports the agent certificate into LocalMachine\My (private key not exportable) and verifies its fingerprint,
 - installs or upgrades the service `StandaloneLapsAgent` (LocalSystem, automatic start, restart on failure) in `%ProgramFiles%\StandaloneLapsAgent`, with state in `%ProgramData%\StandaloneLaps`,
 - writes `HKLM\SOFTWARE\PriCoSoft\SLAPS` (64-bit, SYSTEM/Administrators only) and removes a superseded agent certificate,
+- sets the LAPS signal `AdmPwdEnabled=1` (see [Windows LAPS compatibility](#windows-laps-compatibility-standalone-servers)) when System > LAPS settings exist,
 - runs `StandaloneLaps.Agent.exe validate-config`, tests the API (history read must return 200, an authenticated test upload 400) and starts the service.
 
-Parameters override the predefined values: `-ApiUrl`, `-InstallDirectory`, `-PfxPassword`, `-NoStart`, `-SkipConnectivityTest`, `-KeepCertificate`; `-Uninstall` removes service, settings, files and the agent certificate. Delete the package afterwards; `agent.pfx` contains the private key.
+Parameters override the predefined values: `-ApiUrl`, `-InstallDirectory`, `-PfxPassword`, `-NoStart`, `-SkipConnectivityTest`, `-KeepCertificate`; `-Uninstall` removes service, settings, files, the agent certificate and the LAPS signal/state values it created. Delete the package afterwards; `agent.pfx` contains the private key.
 
 **Agent type:** the agent is a Windows service, not a Group Policy client-side extension. It is still controlled by Group Policy: it rereads the System > LAPS policy and its registry settings every five minutes, and a missing local state triggers the first rotation immediately.
+
+### Windows LAPS compatibility (standalone servers)
+
+SLAPS is for standalone (workgroup) servers, where Windows LAPS cannot back up passwords. There it takes the role of Windows LAPS and reports in the same places, so inventory and compliance tools (for example the Microsoft Defender recommendation "Ensure LAPS is enabled on every endpoint and server") can see a managed local administrator password:
+
+- **Join check:** every cycle the agent checks the join state (`NetGetJoinInformation`, `NetGetAadJoinInformation`). On an Active Directory or Microsoft Entra joined device it changes nothing and logs error **1005** at start and once a day, with a link to the Windows LAPS guide for that directory ([Active Directory](https://learn.microsoft.com/windows-server/identity/laps/laps-scenarios-windows-server-active-directory), [Microsoft Entra ID](https://learn.microsoft.com/windows-server/identity/laps/laps-scenarios-azure-active-directory)). `validate-config` and the installer refuse the same way. Entra *registered* (workplace) devices count as standalone, as with Windows LAPS.
+- **State:** after each cycle the agent writes the Windows LAPS state values under `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\LAPS\State`: `PolicySource` (2, Group Policy — assumed value), `DSRMMode` 0, `LastManagedAccountRid`, `LastAccountRidUpdated`, `LastPasswordUpdateTime` (FILETIME, time of the last verified rotation). Failures are logged as warning 1006.
+- **Event log:** once per hour and right after a password change the agent writes a processing cycle to **Applications and Services Logs > Microsoft > Windows > LAPS > Operational** with the Windows LAPS provider, event IDs and message templates: 10003 start, 10052 scheduled processing, 10022 policy (backup directory shown as "Standalone LAPS server (SLAPS)"), 10020 local account updated or 10016 no update needed, 10004 succeeded; 10005 on failure. Events about Active Directory/Entra ID backup are never written.
+- **Legacy signal:** the installer sets `HKLM\SOFTWARE\Policies\Microsoft Services\AdmPwd\AdmPwdEnabled=1`. Windows LAPS ignores it while System > LAPS has settings, and the agent only rejects it when the legacy Microsoft LAPS client-side extension (AdmPwd.dll) is installed.
+- Microsoft does not document which of these signals Defender evaluates; check the device in the recommendation's *Exposed devices* list after the next assessment (up to about 24 hours).
 
 ## Linux agent
 
@@ -136,7 +147,7 @@ Open `gpedit.msc` on each standalone server: **Computer Configuration > Administ
 
 **Detecting use of the account:** the agent checks every five minutes for a successful sign-in of the managed account after the last rotation: the SAM "last logon" time and Security event 4624 (covers network/SMB sign-ins when logon auditing is enabled, the Windows Server default). The password is reset only after the new password is backed up and verified, exactly like a scheduled rotation; the action runs afterwards. A failing action is logged as warning 1004 but does not undo the reset. Events: 1003 = use detected and reset time scheduled, 1000 = reset done (with reason), 1001 = cycle failed (with reason). As with Windows LAPS, an administrator who signs in with the password can work around these mechanisms; they limit how long a revealed password stays valid. `validate-config` prints the effective settings.
 
-Do not let another product rotate the same account. Domain controllers are rejected. Windows password filters can reject a generated password; such attempts remain unconfirmed and are retried.
+Do not let another product rotate the same account. Domain controllers and Active Directory/Microsoft Entra joined devices are rejected (use Windows LAPS there). Windows password filters can reject a generated password; such attempts remain unconfirmed and are retried.
 
 Rotation order: generate → encrypt → upload → server stores durably → read back and compare → change the SAM account → save local state atomically → report applied. A failed backup prevents the change. Lost reports are retried without another reset. The password from before the first installation is unknown to this product.
 
