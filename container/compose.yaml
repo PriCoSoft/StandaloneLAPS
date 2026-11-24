@@ -11,7 +11,7 @@ services:
     build:
       context: ..
       dockerfile: container/Dockerfile
-    image: slaps-server:1.5.0
+    image: slaps-server:1.6.1
     restart: unless-stopped
     ports:
       - "8443:8443"   # portal: allow only from internal admin networks
@@ -26,6 +26,16 @@ services:
       SLAPS_MASTER_KEY_FILE: /run/secrets/slaps_master_key
       # Slaps__TlsCertificatePath: /certs/tls.crt
       # Slaps__TlsKeyPath: /certs/tls.key
+      # Optional read-only Windows LAPS lookup (docs/Container.md, "Windows LAPS lookup"):
+      # Slaps__WindowsLapsRequiredRole: "Admin"                 # or Reader
+      # Slaps__WindowsLapsAdEnabled: "true"
+      # Slaps__WindowsLapsAdServer: "dc01.corp.example"          # LDAPS 636; also the DPAPI-NG key server
+      # Slaps__WindowsLapsAdUsername: "svc-slaps-laps@corp.example"
+      # Slaps__WindowsLapsAdPasswordFile: /run/secrets/slaps_ad_password
+      # Slaps__WindowsLapsAdCaDirectory: /certs/ad-ca            # hashed CA directory if the DC certificate is not publicly trusted
+      # Slaps__WindowsLapsEntraEnabled: "true"                   # tenant/client default to the OIDC values
+      # Slaps__WindowsLapsEntraCertificatePath: /run/secrets/slaps_graph_pfx
+      # Slaps__WindowsLapsEntraCertificatePasswordFile: /run/secrets/slaps_graph_pfx_password
     secrets:
       - slaps_master_key
     volumes:

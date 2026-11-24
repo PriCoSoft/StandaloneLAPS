@@ -147,6 +147,7 @@ public static class FrameworkTests
                 Check(Vault.MatchCertificate(expired, new[] { new Client { role = "reader", certificateSha256 = Vault.Hash(expired) } }) == null, "expired client rejected");
         }
         passed += FrameworkPortalTests.Run(directory);
+        passed += FrameworkWindowsLapsTests.Run();
         var key = Guid.NewGuid().ToString("D");
         for (var i = 0; i < 60; i++) if (!Vault.PermitApiRequest(key)) throw new Exception("Rate limit rejected too early.");
         Check(!Vault.PermitApiRequest(key), "API rate limit rejects request 61");

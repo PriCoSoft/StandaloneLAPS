@@ -7,6 +7,23 @@ protected string Message;
 protected void Page_Load(object sender, EventArgs e)
 {
     if (PortalAuth.Mode != "Entra") throw new HttpException(404, "Not found.");
+    if (Request.HttpMethod == "GET" && Request.QueryString["state"] != null && (Request.QueryString["admin_consent"] != null || Request.QueryString["error"] != null))
+    {
+        // Return from the admin consent started in entrasetup.aspx (Windows LAPS lookup via Microsoft Graph).
+        var admin = PortalAuth.Current(Request);
+        if (admin == null || !admin.IsAdmin || !PortalAuth.ValidConsentState(Request.QueryString["state"])) throw new HttpException(403, "The admin consent response is not valid for this session.");
+        var granted = string.Equals(Request.QueryString["admin_consent"], "True", StringComparison.OrdinalIgnoreCase) && Request.QueryString["error"] == null;
+        var detail = (Request.QueryString["error_description"] ?? Request.QueryString["error"] ?? "");
+        if (detail.Length > 300) detail = detail.Substring(0, 300);
+        var state = EntraAppCredential.Load();
+        state.consentUtc = EntraAppCredential.Stamp(DateTime.UtcNow);
+        state.consentBy = admin.DisplayName;
+        state.consentResult = granted ? "granted" : "failed: " + detail;
+        EntraAppCredential.Save(state);
+        Vault.AuditTarget(admin.Actor, granted ? "entra-admin-consent-granted" : "entra-admin-consent-failed", WindowsLapsSettings.EntraClientId);
+        Response.Redirect("~/entrasetup.aspx", true);
+        return;
+    }
     if (Request.HttpMethod == "GET")
     {
         Response.Redirect(PortalAuth.BeginSignIn(Response, Request.QueryString["returnUrl"]), true);

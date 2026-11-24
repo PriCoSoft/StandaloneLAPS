@@ -7,6 +7,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- Same as the container server: culture-specific code must fail here, not first in Docker. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
     <NoWarn>$(NoWarn);IDE1006;CA1416</NoWarn>
   </PropertyGroup>
   <ItemGroup>

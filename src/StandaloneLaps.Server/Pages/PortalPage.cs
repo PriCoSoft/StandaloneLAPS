@@ -18,6 +18,6 @@ public abstract class PortalPage : PageModel
     public int Limit => Store.HistoryLimit;
     public abstract string Active { get; }
 
-    public static string DateLabel(string value) => string.IsNullOrEmpty(value) ? "—" : Wire.Timestamp(value).UtcDateTime.ToString("dd MMM yyyy, HH:mm", CultureInfo.GetCultureInfo("en-US"));
+    public static string DateLabel(string value) => string.IsNullOrEmpty(value) ? "—" : Wire.Timestamp(value).UtcDateTime.ToString("dd MMM yyyy, HH:mm", CultureInfo.InvariantCulture);
     public static string Day(DateTime value) => value == DateTime.MinValue ? "—" : value.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC";
 }

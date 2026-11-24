@@ -162,6 +162,18 @@ Copy-Item -LiteralPath (Get-ChildItem -LiteralPath (Join-Path $stage 'linux') -F
 $runtimeDockerfile = @'
 # SLAPS container server {VERSION} (prebuilt). docker compose up -d --build
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
+# Optional Windows LAPS lookup: libldap for System.DirectoryServices.Protocols, Python with dpapi-ng to decrypt
+# encrypted Windows LAPS passwords. --build-arg SLAPS_DPAPI_KERBEROS=true adds Kerberos (default: NTLM via pyspnego).
+ARG SLAPS_DPAPI_KERBEROS=false
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates \
+ && (apt-get install -y --no-install-recommends libldap2 || apt-get install -y --no-install-recommends libldap-2.5-0) \
+ && python3 -m venv /opt/dpapi \
+ && if [ "$SLAPS_DPAPI_KERBEROS" = "true" ]; then \
+      apt-get install -y --no-install-recommends gcc python3-dev libkrb5-dev krb5-user \
+      && /opt/dpapi/bin/pip install --no-cache-dir "dpapi-ng[kerberos]>=0.2,<1"; \
+    else /opt/dpapi/bin/pip install --no-cache-dir "dpapi-ng>=0.2,<1"; fi \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY app/ ./
 COPY agent-package/ /app/agent-package/
@@ -169,7 +181,8 @@ RUN mkdir -p /data && chown "$APP_UID" /data
 ENV ASPNETCORE_ENVIRONMENT=Production \
     ASPNETCORE_HTTP_PORTS= \
     Slaps__DataDirectory=/data \
-    Slaps__AgentPackageDirectory=/app/agent-package
+    Slaps__AgentPackageDirectory=/app/agent-package \
+    Slaps__WindowsLapsPython=/opt/dpapi/bin/python
 USER $APP_UID
 VOLUME /data
 EXPOSE 8443 8444

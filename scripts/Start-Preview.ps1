@@ -32,12 +32,15 @@ $webConfig = [xml](Get-Content -LiteralPath $webConfigPath -Raw)
 ($webConfig.configuration.appSettings.add | Where-Object { $_.key -eq 'PortalAllowedNetworks' }).value = '127.0.0.1/32;::1/128'
 # Only the isolated loopback preview uses HTTP. Shipping source keeps HTTPS and secure cookies required.
 $webConfig.configuration.'system.web'.httpCookies.requireSSL = 'false'
+# Show the Windows LAPS page against an address without a directory (no real AD access from the preview).
+($webConfig.configuration.appSettings.add | Where-Object { $_.key -eq 'WindowsLapsAdEnabled' }).value = 'true'
+($webConfig.configuration.appSettings.add | Where-Object { $_.key -eq 'WindowsLapsAdServer' }).value = '127.0.0.1'
 $webConfig.Save($webConfigPath)
 $compiler = Join-Path $env:windir 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $support = Join-Path $run 'PreviewSupport.dll'
 $sources = @(Get-ChildItem -LiteralPath (Join-Path $root 'web\IisVault\App_Code') -Filter '*.cs' -File | ForEach-Object { $_.FullName })
 $sources += (Join-Path $root 'tests\PreviewData.cs')
-& $compiler /nologo /target:library /langversion:5 "/out:$support" /reference:System.Web.dll /reference:System.Web.Extensions.dll /reference:System.Configuration.dll /reference:System.Core.dll /reference:System.Runtime.Serialization.dll /reference:System.IO.Compression.dll $sources
+& $compiler /nologo /target:library /langversion:5 "/out:$support" /reference:System.Web.dll /reference:System.Web.Extensions.dll /reference:System.Configuration.dll /reference:System.Core.dll /reference:System.Runtime.Serialization.dll /reference:System.IO.Compression.dll /reference:System.DirectoryServices.Protocols.dll $sources
 if ($LASTEXITCODE -ne 0) { throw 'Preview data helper compilation failed.' }
 & (Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -File (Join-Path $PSScriptRoot 'Run-FrameworkTests.ps1') -AssemblyPath $support -FixtureDirectory $run -RunnerType PreviewSeedRunner -DataDirectory (Join-Path $site 'App_Data\Vault')
 if ($LASTEXITCODE -ne 0) { throw 'Preview data generation failed.' }

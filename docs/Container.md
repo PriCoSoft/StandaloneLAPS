@@ -154,8 +154,41 @@ set only `Slaps__DatabaseProvider=postgresql` and the connection string. Run one
 Agent certificates issued by the IIS server stay valid because the same SLAPS CA is imported; their pins come
 from the imported client list.
 
+## Windows LAPS lookup
+
+Like the IIS portal (see README, "Windows LAPS lookup"), the container can **read** Windows LAPS and legacy LAPS passwords from Active Directory and Microsoft Entra ID. Everything is off by default; search and reveal are audited.
+
+**Active Directory on Linux** works like [LAPS-WebUI](https://seji64.github.io/LAPS-WebUI/):
+
+- LDAP via `System.DirectoryServices.Protocols` (libldap in the image) with a simple bind of a **service account over LDAPS (636)**. Plain LDAP with a password is refused. If the DC certificate is issued by an internal CA, mount a directory with the CA certificate (OpenSSL hashed directory, `c_rehash`) and set `WindowsLapsAdCaDirectory`.
+- Encrypted passwords (`msLAPS-Encrypted*`) are decrypted by `/app/dpapi/slaps_dpapi_ng.py` with the Python library [dpapi-ng](https://github.com/jborean93/dpapi-ng) (installed in a venv at `/opt/dpapi` by the Dockerfile). It fetches the group key from the DC over RPC (MS-GKDI, TCP 135 + dynamic RPC ports) with the same service account. Credentials and blobs go to the helper through stdin, never the command line. Default authentication is NTLM via pyspnego; for Kerberos build with `--build-arg SLAPS_DPAPI_KERBEROS=true` and provide a `krb5.conf`.
+- The service account needs read permission on the LAPS attributes (`Set-LapsADReadPasswordPermission`, `Set-AdmPwdReadPasswordPermission`) and must be a member of the group in the LAPS policy *Configure authorized password decryptors*.
+- On a Windows host (development) the server uses native DPAPI-NG with its own identity when no service account is configured.
+
+**Entra ID:** app-only Graph access with `DeviceLocalCredential.Read.All` (application permission, admin consent). Use a certificate (PFX as Docker secret) or a client secret. The setup assistant with self-renewing certificate exists only in the IIS portal so far; in the container provide the PFX and renew it yourself. The search shows only computers with a stored password, the AD description and the stored kinds; mixed legacy/Windows LAPS computers show both passwords. Settings shows the configuration with *Test connection* buttons.
+
+| Setting (`Slaps__…`) | Default | Meaning |
+|---|---|---|
+| `WindowsLapsRequiredRole` | `Admin` | `Admin` or `Reader` |
+| `WindowsLapsAdEnabled` | `false` | Active Directory lookup |
+| `WindowsLapsAdServer` | — (required on Linux) | DC host name (LDAP and DPAPI-NG key server) |
+| `WindowsLapsAdUseSsl`, `WindowsLapsAdPort` | `true`, 636 | LDAPS; must stay on with a service account on Linux |
+| `WindowsLapsAdUsername`, `WindowsLapsAdPassword[File]` | — (required on Linux) | Service account (UPN) |
+| `WindowsLapsAdSearchBase` | domain | Limit to an OU |
+| `WindowsLapsAdCaDirectory` | — | Trusted CA directory for LDAPS (Linux) |
+| `WindowsLapsAdLegacy`, `WindowsLapsAdModern`, `WindowsLapsAdDecrypt`, `WindowsLapsAdHistory` | `true` | What to read |
+| `WindowsLapsAdDecryptMode` | `auto` | `auto` (native on Windows without service account, else Python), `native`, `python` |
+| `WindowsLapsAdDecryptServer`, `WindowsLapsAdDecryptAuth` | AD server, `negotiate` | RPC target and `negotiate`/`kerberos`/`ntlm` for dpapi-ng |
+| `WindowsLapsPython`, `WindowsLapsDpapiScript` | `/opt/dpapi/bin/python` (image), `/app/dpapi/slaps_dpapi_ng.py` | Helper location |
+| `WindowsLapsEntraEnabled` | `false` | Entra ID lookup |
+| `WindowsLapsEntraTenantId`, `WindowsLapsEntraClientId` | from `OidcAuthority` / `OidcClientId` | App registration for Graph |
+| `WindowsLapsEntraCertificatePath`, `WindowsLapsEntraCertificatePassword[File]` | — | PFX for the client assertion (recommended) |
+| `WindowsLapsEntraClientSecret[File]` | — | Alternative to the certificate |
+| `WindowsLapsEntraHistory` | `true` | Show older Entra passwords |
+
 ## Limits
 
+- Windows LAPS lookup (1.6.0): the Python dpapi-ng path, LDAPS on Linux and the Docker image build have not been run yet (no Docker/Python on the development host); Graph and the helper protocol are tested with fakes.
 - One container instance per database (write serialization and API rate limit are in-process).
 - The portal has no local accounts: an OpenID Connect provider is required.
 - Development sign-in (`Slaps__AuthMode=Development`) works only with `ASPNETCORE_ENVIRONMENT=Development` and only

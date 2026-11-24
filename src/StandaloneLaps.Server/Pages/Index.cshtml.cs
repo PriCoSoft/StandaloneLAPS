@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Microsoft.AspNetCore.Html;
 using Microsoft.AspNetCore.Mvc;
 
 namespace StandaloneLaps.Server.Pages;
@@ -15,11 +16,16 @@ public sealed class IndexModel : PortalPage
     public override string Active => ShowDeleted ? "deleted" : "devices";
     public Guid Device, Rotation;
     public bool ShowDeleted, ConfirmDelete;
-    public string Query = "", Tab = "overview", Secret, Account, Message;
+    public string Query = "", Tab = "password", Secret, Account, Message;
     public DeviceSummary[] Devices = Array.Empty<DeviceSummary>();
     public DeviceSummary Selected;
     public HistoryEntry[] Entries = Array.Empty<HistoryEntry>();
+    public HistoryEntry Latest, LastApplied;
     public StoredRecord SelectedRecord;
+
+    // Revealed credential with copy buttons, or nothing when this version was not revealed in this request.
+    public IHtmlContent Revealed(Guid rotation) => Secret == null || rotation != Rotation ? HtmlString.Empty
+        : CredentialHtml.Render("slaps-" + rotation.ToString("N")[..8], null, Account, Secret, new[] { "Version " + rotation.ToString("D"), "Close this page after use · copying is not audited, revealing is" });
 
     public static string Status(DeviceSummary value) => value.Deleted ? "Deleted" : value.Versions == 0 ? "Awaiting backup" : value.Unconfirmed ? "Unconfirmed" : "Reported applied";
 
@@ -40,7 +46,8 @@ public sealed class IndexModel : PortalPage
         if (ShowDeleted && !identity.IsAdmin) return Forbid();
         Query = Request.Query["q"].ToString().Trim();
         if (Query.Length > 200) Query = Query[..200];
-        Tab = Request.Query["tab"] == "history" ? "history" : "overview";
+        // "overview" is the pre-1.6 name of the first tab; old links keep working.
+        Tab = Request.Query["tab"] == "history" ? "history" : Request.Query["tab"] == "details" ? "details" : "password";
         ConfirmDelete = Request.Query["confirm"] == "delete" && identity.IsAdmin && !ShowDeleted;
         Guid.TryParseExact(Request.Query["device"], "D", out Device);
         Guid.TryParseExact(Request.Query["rotation"], "D", out Rotation);
@@ -56,6 +63,8 @@ public sealed class IndexModel : PortalPage
         if (Selected == null || ShowDeleted) return;
         Store.Audit(Identity.Actor, "portal-history", Device, Guid.Empty);
         Entries = Store.History(Device, 0, Limit);
+        Latest = Entries.FirstOrDefault();
+        LastApplied = Entries.FirstOrDefault(e => e.appliedReportedUtc != null);
         if (Rotation != Guid.Empty) SelectedRecord = Store.Get(Device, Rotation);
     }
 
@@ -87,12 +96,11 @@ public sealed class IndexModel : PortalPage
                 try { Store.SetDeleted(Device, false, identity.Actor); }
                 catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
             }
-            return Redirect(DeviceUrl(Guid.Empty, "overview", Guid.Empty, false));
+            return Redirect(DeviceUrl(Guid.Empty, "password", Guid.Empty, false));
         }
         if (action != "reveal" || ShowDeleted || Rotation == Guid.Empty) return BadRequest("Select a password version.");
         LoadHistory();
         if (SelectedRecord == null) return NotFound();
-        Tab = "history";
         if (!Options.EnableWebDecryption) Message = "Web decryption is disabled. Download the encrypted envelope and use offline recovery.";
         else
         {

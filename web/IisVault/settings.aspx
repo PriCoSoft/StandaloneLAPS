@@ -8,7 +8,7 @@
 <script runat="server">
 protected PortalIdentity Identity;
 protected bool EntraMode;
-protected string Csrf, ErrorText, SavedText, AgentVersion;
+protected string Csrf, ErrorText, SavedText, AgentVersion, LapsTest, LapsTestError;
 protected int Limit, FieldValue;
 protected PortalSettings Current;
 protected CertificateInfo[] Certificates = new CertificateInfo[0];
@@ -24,7 +24,16 @@ protected void Page_Load(object sender, EventArgs e)
     {
         if (!Identity.IsAdmin) throw new HttpException(403, "Administrator access required.");
         if (Request.Form["csrf"] != Csrf) throw new HttpException(403, "Invalid request token.");
-        if (Request.Form["action"] != "history-limit") throw new HttpException(400, "Unsupported request.");
+        var action = Request.Form["action"];
+        if (action == "test-ad" || action == "test-entra")
+        {
+            try { LapsTest = action == "test-ad" ? ActiveDirectoryLaps.Test() : EntraLaps.Test(); }
+            catch (WindowsLapsException ex) { LapsTestError = ex.Message; }
+            catch (WindowsLapsNotFoundException) { LapsTestError = "Microsoft Graph returned 404 (not found)."; }
+            Vault.AuditTarget(Identity.Actor, "windows-laps-" + action + (LapsTestError == null ? "-ok" : "-failed"), "");
+        }
+        else if (action != "history-limit") throw new HttpException(400, "Unsupported request.");
+        else {
         int requested;
         var previous = Vault.HistoryLimit;
         if (!int.TryParse(Request.Form["historyLimit"], out requested) || requested < Vault.MinHistoryLimit || requested > Vault.MaxHistoryLimit)
@@ -35,6 +44,7 @@ protected void Page_Load(object sender, EventArgs e)
         {
             Vault.SetHistoryLimit(requested, Identity.Actor);
             SavedText = requested == previous ? "No change." : "History limit changed from " + previous + " to " + requested + " versions per device.";
+        }
         }
     }
     Current = Vault.Settings();
@@ -103,6 +113,38 @@ protected void Page_Load(object sender, EventArgs e)
 <% } %>
 </section>
 
+<section class="form-card settings-card" id="windows-laps">
+<h2 class="card-title">Windows LAPS lookup</h2>
+<p class="helper tight">Read-only lookup of passwords that Windows LAPS or legacy Microsoft LAPS stored in Active Directory or Microsoft Entra ID. Switched in web.config (<code>WindowsLaps*</code>); allowed for <strong><%= WindowsLapsSettings.ReaderAllowed ? "readers and administrators" : "administrators only" %></strong> (<code>WindowsLapsRequiredRole</code>).</p>
+<% if (!string.IsNullOrEmpty(LapsTest)) { %><p class="notice success"><%= E(LapsTest) %></p><% } %>
+<% if (!string.IsNullOrEmpty(LapsTestError)) { %><p class="notice danger"><%= E(LapsTestError) %></p><% } %>
+<div class="certificate">
+<div class="certificate-head"><h3>Active Directory</h3><span class="badge <%= WindowsLapsSettings.AdEnabled ? "success" : "neutral" %>"><span></span><%= WindowsLapsSettings.AdEnabled ? "On" : "Off" %></span></div>
+<dl>
+<dt>Domain controller</dt><dd><%= E(WindowsLapsSettings.AdServer.Length > 0 ? WindowsLapsSettings.AdServer : "Located automatically" + (WindowsLapsSettings.DnsDomain.Length > 0 ? " (domain " + WindowsLapsSettings.DnsDomain + ")" : " (this server is not domain-joined)")) %></dd>
+<dt>Search base</dt><dd class="mono"><%= E(WindowsLapsSettings.AdSearchBase.Length > 0 ? WindowsLapsSettings.AdSearchBase : "Whole domain") %></dd>
+<dt>Connection</dt><dd><%= WindowsLapsSettings.AdUseSsl ? "LDAPS (636)" : "LDAP 389, Kerberos signed and encrypted" %></dd>
+<dt>Reads</dt><dd><%= E(string.Join(", ", new[] { WindowsLapsSettings.AdOptions.Legacy ? "legacy LAPS (ms-Mcs-AdmPwd)" : null, WindowsLapsSettings.AdOptions.Modern ? "Windows LAPS" + (WindowsLapsSettings.AdOptions.Decrypt ? " incl. encrypted (DPAPI-NG)" : " (clear text only)") : null, WindowsLapsSettings.AdOptions.Modern && WindowsLapsSettings.AdOptions.History ? "password history" : null }.Where(s => s != null))) %></dd>
+<dt>Runs as</dt><dd><%= E(WindowsLapsSettings.NetworkIdentity) %></dd>
+</dl>
+<p class="helper tight">This identity needs the LAPS read permission on the OUs (<code>Set-LapsADReadPasswordPermission</code>, <code>Set-AdmPwdReadPasswordPermission</code>) and, for encrypted passwords, membership in the group of the LAPS policy <em>Configure authorized password decryptors</em>.</p>
+<% if (Identity.IsAdmin && WindowsLapsSettings.AdEnabled) { %><form method="post"><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button secondary" type="submit" name="action" value="test-ad">Test Active Directory connection</button></form><% } %>
+</div>
+<div class="certificate">
+<div class="certificate-head"><h3>Microsoft Entra ID</h3><span class="badge <%= WindowsLapsSettings.EntraEnabled ? "success" : "neutral" %>"><span></span><%= WindowsLapsSettings.EntraEnabled ? "On" : "Off" %></span></div>
+<dl>
+<dt>Tenant ID</dt><dd class="mono"><%= E(WindowsLapsSettings.EntraTenantId) %></dd>
+<dt>Application (client) ID</dt><dd class="mono"><%= E(WindowsLapsSettings.EntraClientId) %></dd>
+<dt>Credential</dt><dd><%= E(EntraLaps.CredentialSource) %></dd>
+<% var entraState = EntraAppCredential.Load(); if (entraState.current != null) { %><dt>Certificate valid until</dt><dd><%= E(PortalLayout.Utc(EntraAppCredential.Parse(entraState.currentNotAfter))) %><%= entraState.objectId == null ? " · automatic renewal off (Object ID missing)" : " · renewed automatically" %></dd><% } %>
+<% if (entraState.lastRenewalError != null) { %><dt>Renewal problem</dt><dd class="error-text"><%= E(entraState.lastRenewalError) %></dd><% } %>
+<dt>Permission</dt><dd>Microsoft Graph <code>DeviceLocalCredential.Read.All</code> (application)<%= entraState.consentResult == null ? "" : E(" · consent " + entraState.consentResult) %></dd>
+<dt>History</dt><dd><%= WindowsLapsSettings.EntraHistory ? "Older passwords are shown" : "Only the current password" %></dd>
+</dl>
+<% if (Identity.IsAdmin) { %><div class="form-actions"><a class="button" href="entrasetup.aspx">Open Entra setup</a><% if (WindowsLapsSettings.EntraEnabled) { %><form method="post"><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button secondary" type="submit" name="action" value="test-entra">Test Entra connection</button></form><% } %></div><% } %>
+</div>
+</section>
+
 <section class="form-card settings-card">
 <h2 class="card-title">About</h2>
 <dl class="summary-list">
@@ -110,6 +152,7 @@ protected void Page_Load(object sender, EventArgs e)
 <dt>Agent in client packages</dt><dd><%= E(AgentVersion) %></dd>
 <dt>Sign-in</dt><dd><%= EntraMode ? "Microsoft Entra ID (app roles SLAPS.Admin / SLAPS.Reader)" : E(PortalAuth.Mode) %></dd>
 <dt>Password reveal in browser</dt><dd><%= string.Equals(Vault.Setting("EnableWebDecryption"), "true", StringComparison.OrdinalIgnoreCase) ? "Enabled" : "Disabled" %></dd>
+<dt>Windows LAPS lookup</dt><dd><%= WindowsLapsSettings.Enabled ? E((WindowsLapsSettings.AdEnabled ? "Active Directory" : "") + (WindowsLapsSettings.AdEnabled && WindowsLapsSettings.EntraEnabled ? " + " : "") + (WindowsLapsSettings.EntraEnabled ? "Microsoft Entra ID" : "") + (WindowsLapsSettings.ReaderAllowed ? " (readers and administrators)" : " (administrators only)")) : "Disabled" %></dd>
 <% if (Identity.IsAdmin) { %>
 <dt>Public URL</dt><dd class="mono"><%= E(Vault.Setting("PublicBaseUrl")) %></dd>
 <dt>Portal networks</dt><dd class="mono"><%= E(string.Join("; ", Vault.List(Vault.Setting("PortalAllowedNetworks")))) %></dd>

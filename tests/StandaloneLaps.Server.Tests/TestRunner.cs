@@ -35,8 +35,10 @@ internal static class TestRunner
         return port;
     }
 
-    private static async Task<int> Main()
+    private static async Task<int> Main(string[] args)
     {
+        // Stand-in for the Python dpapi-ng helper (same stdin/stdout protocol), see WindowsLapsTests.
+        if (args.Length == 1 && args[0] == WindowsLapsTests.FakeHelperArgument) return WindowsLapsTests.FakeHelper();
         var root = Path.Combine(Path.GetTempPath(), "slaps-server-tests-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(root);
         try
@@ -63,7 +65,9 @@ internal static class TestRunner
         ["Slaps:PublicUrl"] = $"https://localhost:{portal}/", ["Slaps:AgentApiUrl"] = $"https://localhost:{agent}/",
         ["Slaps:DataDirectory"] = Path.Combine(root, "data"), ["Slaps:AgentPackageDirectory"] = Path.Combine(root, "agent-package"),
         ["Slaps:MasterKey"] = masterKey, ["Slaps:AuthMode"] = "Development", ["Slaps:TlsDnsNames"] = "localhost;127.0.0.1",
-        ["Logging:LogLevel:Default"] = "Warning"
+        ["Logging:LogLevel:Default"] = "Warning",
+        // Windows LAPS lookup against a closed local port: the page and error handling are exercised without touching a real directory.
+        ["Slaps:WindowsLapsAdEnabled"] = "true", ["Slaps:WindowsLapsAdServer"] = "127.0.0.1", ["Slaps:WindowsLapsAdPort"] = "1", ["Slaps:WindowsLapsAdUseSsl"] = "false"
     };
 
     private static void CreateAgentFiles(string directory)
@@ -80,6 +84,8 @@ internal static class TestRunner
         var masterKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(36));
         int portal = FreePort(), agent = FreePort();
         var config = Config(root, masterKey, portal, agent);
+
+        await WindowsLapsTests.Run(Check);
 
         Console.WriteLine("Configuration");
         Check("missing master key is rejected", Throws<InvalidOperationException>(() => ServerProgram.Build(Array.Empty<string>(), new Dictionary<string, string>(config) { ["Slaps:MasterKey"] = "short" })));
@@ -177,6 +183,39 @@ internal static class TestRunner
             Check("reveal shows account and password", reveal.Contains("Secret-Pass-1!") && reveal.Contains("TESTHOST\\Administrator"));
             var download = await portalClient.GetStringAsync(baseUrl + $"download?device={deviceId:D}&rotation={rotation:D}");
             Check("encrypted envelope download", download.Contains(rotation.ToString("D")) && !download.Contains("Secret-Pass-1!"));
+            Check("revealed password has copy and show buttons", reveal.Contains("data-copy=") && reveal.Contains("data-toggle=") && reveal.Contains("data-secret") && reveal.Contains("<script src=\"copy.js\"></script>"));
+
+            Console.WriteLine("Password tab (current password first)");
+            var passwordTab = await portalClient.GetStringAsync(baseUrl + $"?device={deviceId:D}");
+            Check("device opens on the Password tab with the newest version", passwordTab.Contains("Current local administrator password") && passwordTab.Contains("Show password") && passwordTab.Contains("tab=password&amp;rotation=" + rotation.ToString("D")) && !passwordTab.Contains("Secret-Pass-1!"));
+            Check("history and details are separate tabs", passwordTab.Contains("tab=history") && passwordTab.Contains("tab=details") && passwordTab.Contains(">Details</a>"));
+            var currentUrl = baseUrl + $"?device={deviceId:D}&tab=password&rotation={rotation:D}";
+            var current = await (await portalClient.PostAsync(currentUrl, Form(passwordTab, ("action", "reveal")))).Content.ReadAsStringAsync();
+            Check("one click on the Password tab reveals the current password", current.Contains("Secret-Pass-1!") && current.Contains("TESTHOST\\Administrator") && current.Contains("Current local administrator password") && !current.Contains(">Show password</button>"));
+            Check("old ?tab=overview links open the Password tab", (await portalClient.GetStringAsync(baseUrl + $"?device={deviceId:D}&tab=overview")).Contains("Current local administrator password"));
+            Check("copy script is served", (await portalClient.GetStringAsync(baseUrl + "copy.js")).Contains("navigator.clipboard"));
+
+            Console.WriteLine("Windows LAPS page");
+            var lapsPage = await portalClient.GetAsync(baseUrl + "windowslaps");
+            var lapsHtml = await lapsPage.Content.ReadAsStringAsync();
+            Check("Windows LAPS page and navigation item for administrators", lapsPage.StatusCode == HttpStatusCode.OK && lapsHtml.Contains("Search for a computer") && lapsHtml.Contains("href=\"windowslaps\"") && lapsHtml.Contains("Active Directory: on") && lapsHtml.Contains("Microsoft Entra ID: off"));
+            var unreachable = await portalClient.GetStringAsync(baseUrl + "windowslaps?q=SRV-APP01");
+            Check("unreachable domain controller is reported on the page, not as a server error", unreachable.Contains("Active Directory: Cannot connect to Active Directory"));
+            var injection = await portalClient.GetStringAsync(baseUrl + "windowslaps?q=" + Uri.EscapeDataString("x)(objectClass=*"));
+            Check("LDAP filter characters are rejected before any directory access", injection.Contains("Enter a computer name") && !injection.Contains("Cannot connect"));
+            var readerRequest = new HttpRequestMessage(HttpMethod.Get, baseUrl + "windowslaps");
+            readerRequest.Headers.Add("X-Slaps-Development-Role", "reader");
+            Check("readers cannot open Windows LAPS unless WindowsLapsRequiredRole=Reader", (await portalClient.SendAsync(readerRequest)).StatusCode == HttpStatusCode.Forbidden);
+            var readerHome = new HttpRequestMessage(HttpMethod.Get, baseUrl);
+            readerHome.Headers.Add("X-Slaps-Development-Role", "reader");
+            Check("readers do not see the Windows LAPS navigation item", !(await (await portalClient.SendAsync(readerHome)).Content.ReadAsStringAsync()).Contains("href=\"windowslaps\""));
+            Check("search panel explains that only computers with a stored password are listed", lapsHtml.Contains("Only computers with a stored LAPS password are listed") && lapsHtml.Contains("class=\"search-panel\""));
+            Check("device table is sortable and resizable (copy.js)", passwordTab.Contains("class=\"device-table sortable\"") && passwordTab.Contains("data-sort=\"number\"") && (await portalClient.GetStringAsync(baseUrl + "copy.js")).Contains("col-resizer"));
+            var settingsLaps = await portalClient.GetStringAsync(baseUrl + "settings");
+            Check("settings show the Windows LAPS configuration", settingsLaps.Contains("Windows LAPS lookup") && settingsLaps.Contains("127.0.0.1") && settingsLaps.Contains("Test Active Directory connection") && settingsLaps.Contains("Microsoft Entra ID"));
+            var adTest = await (await portalClient.PostAsync(baseUrl + "settings", Form(settingsLaps, ("action", "test-ad")))).Content.ReadAsStringAsync();
+            Check("Active Directory connection test reports the failure on the page", adTest.Contains("notice danger") && adTest.Contains("Cannot connect to Active Directory"));
+            Check("Windows LAPS reveal without antiforgery token is rejected", (await portalClient.PostAsync(baseUrl + "windowslaps?source=ad&id=" + Guid.NewGuid() + "&tab=password", new FormUrlEncodedContent(new Dictionary<string, string> { ["action"] = "reveal" }))).StatusCode == HttpStatusCode.BadRequest);
 
             Console.WriteLine("Retention, delete, restore, rekey");
             store.SetHistoryLimit(2, "test");

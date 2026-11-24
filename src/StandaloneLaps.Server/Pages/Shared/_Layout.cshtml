@@ -12,6 +12,10 @@
 <div class="shell">
 <aside class="navigation"><p class="nav-label">MANAGE</p>
 <a class="nav-item @(portal.Active == "devices" ? "active" : "")" href="./"><span class="nav-icon">&#9636;</span>Devices</a>
+@if (portal.Options.WindowsLaps.Allowed(identity))
+{
+<a class="nav-item @(portal.Active == "windowslaps" ? "active" : "")" href="windowslaps"><span class="nav-icon">&#9919;</span>Windows LAPS</a>
+}
 @if (identity.IsAdmin)
 {
 <a class="nav-item @(portal.Active == "add" ? "active" : "")" href="addclient"><span class="nav-icon">&#65291;</span>Add client</a>
@@ -20,4 +24,4 @@
 <a class="nav-item @(portal.Active == "settings" ? "active" : "")" href="settings"><span class="nav-icon">&#9881;</span>Settings</a>
 <div class="nav-bottom"><span class="security-dot"></span>Encrypted vault<small>@portal.Limit versions per device</small><small class="version">Version @StandaloneLapsWeb.AppVersion.Number · container</small></div></aside>
 @RenderBody()
-</div></body></html>
+</div><script src="copy.js"></script></body></html>

@@ -7,15 +7,15 @@
 }
 <main class="content @(Model.Selected != null ? "with-drawer" : "")">
 <div class="breadcrumbs">SLAPS <span>/</span> @ViewData["Title"]</div>
-<div class="page-heading"><div><p class="eyebrow">ADMINISTRATOR RECOVERY</p><h1>@ViewData["Title"]<span class="count">@Model.Devices.Length</span></h1><p class="subtitle">@(Model.ShowDeleted ? "Restore an archived device and its agent access." : "Browse devices and securely recover local administrator credentials.")</p></div>
+<div class="page-heading"><div><p class="eyebrow">ADMINISTRATOR RECOVERY</p><h1>@ViewData["Title"]<span class="count">@Model.Devices.Length</span></h1><p class="subtitle">@(Model.ShowDeleted ? "Restore an archived device and its agent access." : "Select a device to see its current local administrator password.")</p></div>
 @if (identity.IsAdmin && !Model.ShowDeleted) {<a class="button" href="addclient">Add client</a>} else {<span class="role-label">@(identity.IsAdmin ? "Manage access" : "Read access")</span>}</div>
 <div class="list-card">
 <form class="search-toolbar" method="get">@if (Model.ShowDeleted) {<input type="hidden" name="view" value="deleted" />}<label class="search-box"><span aria-hidden="true">⌕</span><input type="search" name="q" value="@Model.Query" placeholder="Search by device name or ID" aria-label="Search devices" maxlength="200" /></label><button class="button secondary" type="submit">Search</button>@if (!string.IsNullOrEmpty(Model.Query)) {<a class="text-link" href="@(Model.ShowDeleted ? "./?view=deleted" : "./")">Clear</a>}<span class="results">@Model.Devices.Length @(Model.Devices.Length == 1 ? "device" : "devices")</span></form>
-<div class="table-scroll"><table class="device-table"><thead><tr><th>Device name</th><th>Last backup (UTC)</th><th>Status</th><th class="number">Versions</th><th><span class="sr-only">Details</span></th></tr></thead><tbody>
+<div class="table-scroll"><table class="device-table sortable" data-table-key="devices"><thead><tr><th data-sort="text">Device name</th><th data-sort="text">Last backup (UTC)</th><th data-sort="text">Status</th><th class="number" data-sort="number">Versions</th><th class="no-sort"><span class="sr-only">Details</span></th></tr></thead><tbody>
 @foreach (var device in Model.Devices)
 {
-    var link = Model.DeviceUrl(Guid.Parse(device.DeviceId), "overview", none, false);
-    <tr class="@(Model.Selected != null && Model.Selected.DeviceId == device.DeviceId ? "selected-row" : "")"><td><a class="device-link" href="@link"><span class="device-icon" aria-hidden="true"></span><span><strong>@device.Name</strong><small>@device.DeviceId</small></span></a></td><td class="date-cell">@PortalPage.DateLabel(device.LastBackupUtc)</td><td><span class="badge @(device.Deleted ? "neutral" : device.Unconfirmed ? "warning" : device.Versions == 0 ? "neutral" : "success")"><span></span>@IndexModel.Status(device)</span></td><td class="number">@device.Versions<span class="muted"> / @Model.Limit</span></td><td><a class="row-open" aria-label="Open @device.Name" href="@link">›</a></td></tr>
+    var link = Model.DeviceUrl(Guid.Parse(device.DeviceId), "password", none, false);
+    <tr class="@(Model.Selected != null && Model.Selected.DeviceId == device.DeviceId ? "selected-row" : "")"><td><a class="device-link" href="@link"><span class="device-icon" aria-hidden="true"></span><span><strong>@device.Name</strong><small>@device.DeviceId</small></span></a></td><td class="date-cell" data-sort-value="@device.LastBackupUtc">@PortalPage.DateLabel(device.LastBackupUtc)</td><td><span class="badge @(device.Deleted ? "neutral" : device.Unconfirmed ? "warning" : device.Versions == 0 ? "neutral" : "success")"><span></span>@IndexModel.Status(device)</span></td><td class="number" data-sort-value="@device.Versions">@device.Versions<span class="muted"> / @Model.Limit</span></td><td><a class="row-open" aria-label="Open @device.Name" href="@link">›</a></td></tr>
 }
 </tbody></table></div>
 @if (Model.Devices.Length == 0) {<div class="empty-state"><span class="empty-icon">⌕</span><h2>@(string.IsNullOrEmpty(Model.Query) ? "No devices here yet" : "No matching devices")</h2><p>@(string.IsNullOrEmpty(Model.Query) ? "Devices added with \"Add client\" appear here. Deleted devices can be restored by an administrator." : "Try a different device name or part of its ID.")</p></div>}
@@ -25,44 +25,84 @@
 @if (Model.Selected != null)
 {
     var selected = Model.Selected;
-    var close = Model.DeviceUrl(none, "overview", none, false);
+    var close = Model.DeviceUrl(none, "password", none, false);
+    var latest = Model.Latest;
+    var lastApplied = Model.LastApplied;
 <a class="drawer-backdrop" href="@close" aria-label="Close device details"></a>
 <aside class="drawer" aria-labelledby="device-title"><div class="drawer-top"><div class="drawer-breadcrumb">Devices <span>/</span> @selected.Name</div><a class="close-button" href="@close" aria-label="Close device details">×</a></div>
 <div class="drawer-heading"><span class="device-icon large" aria-hidden="true"></span><div><h2 id="device-title">@selected.Name</h2><p>Standalone @(selected.Platform == "linux" ? "Linux" : "Windows") device</p></div></div>
-<div class="drawer-actions">@if (identity.IsAdmin && !Model.ShowDeleted) {<span class="drawer-links"><a href="addclient?device=@Model.Device">New certificate package</a><a class="delete-link" href="@Model.DeviceUrl(Model.Device, "overview", none, true)">Delete device</a></span>}<span class="badge @(Model.ShowDeleted ? "neutral" : selected.Unconfirmed ? "warning" : selected.Versions == 0 ? "neutral" : "success")"><span></span>@IndexModel.Status(selected)</span></div>
-<nav class="tabs" aria-label="Device sections"><a class="@(Model.Tab == "overview" ? "active" : "")" href="@Model.DeviceUrl(Model.Device, "overview", none, false)">Overview</a>@if (!Model.ShowDeleted) {<a class="@(Model.Tab == "history" ? "active" : "")" href="@Model.DeviceUrl(Model.Device, "history", none, false)">Password history <span>@Model.Entries.Length</span></a>}</nav>
+<div class="drawer-actions">@if (identity.IsAdmin && !Model.ShowDeleted) {<span class="drawer-links"><a href="addclient?device=@Model.Device">New certificate package</a><a class="delete-link" href="@Model.DeviceUrl(Model.Device, "details", none, true)">Delete device</a></span>}<span class="badge @(Model.ShowDeleted ? "neutral" : selected.Unconfirmed ? "warning" : selected.Versions == 0 ? "neutral" : "success")"><span></span>@IndexModel.Status(selected)</span></div>
+@if (!Model.ShowDeleted)
+{
+<nav class="tabs" aria-label="Device sections"><a class="@(Model.Tab == "password" ? "active" : "")" href="@Model.DeviceUrl(Model.Device, "password", none, false)">Password</a><a class="@(Model.Tab == "history" ? "active" : "")" href="@Model.DeviceUrl(Model.Device, "history", none, false)">History <span>@Model.Entries.Length</span></a><a class="@(Model.Tab == "details" ? "active" : "")" href="@Model.DeviceUrl(Model.Device, "details", none, false)">Details</a></nav>
+}
 <div class="drawer-body">
 @if (Model.ConfirmDelete)
 {
-<section class="notice danger"><h3>Delete this device?</h3><p>The device disappears from the active list and its agent is blocked. Encrypted history is kept and can be restored by an administrator.</p><form method="post"><label class="field-label" for="confirmName">Type <strong>@selected.Name</strong> to confirm</label><input class="text-input" id="confirmName" name="confirmName" autocomplete="off" required /><div class="form-actions"><button class="button destructive" type="submit" name="action" value="delete">Delete device</button><a href="@Model.DeviceUrl(Model.Device, "overview", none, false)">Cancel</a></div></form></section>
+<section class="notice danger"><h3>Delete this device?</h3><p>The device disappears from the active list and its agent is blocked. Encrypted history is kept and can be restored by an administrator.</p><form method="post"><label class="field-label" for="confirmName">Type <strong>@selected.Name</strong> to confirm</label><input class="text-input" id="confirmName" name="confirmName" autocomplete="off" required /><div class="form-actions"><button class="button destructive" type="submit" name="action" value="delete">Delete device</button><a href="@Model.DeviceUrl(Model.Device, "details", none, false)">Cancel</a></div></form></section>
 }
 @if (Model.ShowDeleted)
 {
 <section class="notice"><h3>This device is deleted</h3><p>Its encrypted records are kept. Restore it to view history and allow its agent certificate to upload again.</p><form method="post"><label class="checkbox"><input type="checkbox" name="confirmRestore" value="yes" required />Restore this device and its agent access.</label><button class="button" type="submit" name="action" value="restore">Restore device</button></form></section>
 }
-else if (Model.Tab == "overview")
+else if (Model.Tab == "password")
 {
-<section class="detail-section"><h3>Device information</h3><dl><dt>Device name</dt><dd>@selected.Name</dd><dt>Device ID</dt><dd class="mono">@Model.Device</dd><dt>Last backup</dt><dd>@PortalPage.DateLabel(selected.LastBackupUtc) @(selected.LastBackupUtc == null ? "" : "UTC")</dd><dt>Last applied report</dt><dd>@PortalPage.DateLabel(selected.LastAppliedUtc) @(selected.LastAppliedUtc == null ? "" : "UTC")</dd><dt>Retained versions</dt><dd>@Model.Entries.Length of @Model.Limit</dd></dl></section>
-<section class="detail-section"><h3>Protection</h3><dl><dt>Password encryption</dt><dd>AES-256-GCM</dd><dt>Recovery key protection</dt><dd>RSA-OAEP-SHA256</dd><dt>Agent certificate SHA-256</dt><dd class="mono fingerprint">@selected.CertificateSha256</dd><dt>Storage</dt><dd>@(Model.Store.IsPostgres ? "PostgreSQL" : "SQLite") database</dd></dl><p class="helper">Records are encrypted for the recovery certificate. Its private key is stored encrypted with the server's master key, not in plain form.</p></section>
-<a class="button inline" href="@Model.DeviceUrl(Model.Device, "history", none, false)">View password history</a>
+    if (latest == null)
+    {
+<div class="empty-panel"><h3>No password yet</h3><p>The first successful agent backup will appear here.</p></div>
+    }
+    else
+    {
+<section class="current-card"><h3>Current local administrator password</h3>
+<div class="meta"><span>Backed up @PortalPage.DateLabel(latest.createdUtc) UTC</span><span class="badge @(latest.appliedReportedUtc == null ? "warning" : "success")"><span></span>@(latest.appliedReportedUtc == null ? "Not confirmed yet" : "Applied on the device")</span></div>
+@if (latest.appliedReportedUtc == null) {<p>The agent has not confirmed this newest version yet (rotation in progress or interrupted). If it does not work, use the last confirmed password below.</p>}
+@if (!Model.Options.EnableWebDecryption)
+{
+<p class="notice">Web decryption is disabled. Download the encrypted envelope and use offline recovery.</p><a class="button secondary" href="download?device=@Model.Device&amp;rotation=@latest.rotationId">Download encrypted envelope</a>
 }
-else
+else if (Model.Secret == null || Model.Rotation != latest.rotationId)
 {
-<div class="section-heading"><h3>Password history</h3><span class="muted">@Model.Entries.Length / @Model.Limit versions</span></div><p class="helper">An unconfirmed candidate may already be active after an interrupted rotation. Applied status is reported by the agent.</p>
+<form method="post" action="@Model.DeviceUrl(Model.Device, "password", latest.rotationId, false)" asp-antiforgery="true"><button class="button large" name="action" value="reveal" type="submit">Show password</button></form>
+}
+@Model.Revealed(latest.rotationId)
+</section>
+        if (latest.appliedReportedUtc == null && lastApplied != null)
+        {
+<section class="current-card"><h3>Last confirmed password</h3><div class="meta"><span>Backed up @PortalPage.DateLabel(lastApplied.createdUtc) UTC</span><span class="badge success"><span></span>Applied on the device</span></div>
+@if (Model.Options.EnableWebDecryption && (Model.Secret == null || Model.Rotation != lastApplied.rotationId))
+{
+<form method="post" action="@Model.DeviceUrl(Model.Device, "password", lastApplied.rotationId, false)" asp-antiforgery="true"><button class="button secondary" name="action" value="reveal" type="submit">Show password</button></form>
+}
+@Model.Revealed(lastApplied.rotationId)
+</section>
+        }
+        if (!string.IsNullOrEmpty(Model.Message)) {<p class="notice">@Model.Message</p>}
+<p class="helper">Older versions are in the <a href="@Model.DeviceUrl(Model.Device, "history", none, false)">History</a> tab. Every reveal is audited.</p>
+    }
+}
+else if (Model.Tab == "history")
+{
+<div class="section-heading"><h3>Password history</h3><span class="muted">@Model.Entries.Length / @Model.Limit versions</span></div><p class="helper">Newest first. Select a version to reveal or download it. An unconfirmed candidate may already be active after an interrupted rotation.</p>
 <div class="history-list">
 @foreach (var entry in Model.Entries)
 {
-<a class="history-item @(Model.Rotation == entry.rotationId ? "chosen" : "")" href="@Model.DeviceUrl(Model.Device, "history", entry.rotationId, false)"><span class="history-marker @(entry.appliedReportedUtc == null ? "pending" : "")"></span><span class="history-content"><strong>@PortalPage.DateLabel(entry.createdUtc) UTC</strong><span class="badge @(entry.appliedReportedUtc == null ? "warning" : "success")">@(entry.appliedReportedUtc == null ? "Unconfirmed" : "Reported applied")</span><small>@entry.rotationId</small></span><span class="history-chevron">›</span></a>
+<a class="history-item @(Model.Rotation == entry.rotationId ? "chosen" : "")" href="@Model.DeviceUrl(Model.Device, "history", entry.rotationId, false)"><span class="history-marker @(entry.appliedReportedUtc == null ? "pending" : "")"></span><span class="history-content"><strong>@PortalPage.DateLabel(entry.createdUtc) UTC</strong>@if (latest != null && entry.rotationId == latest.rotationId) {<span class="badge neutral">Newest</span>}<span class="badge @(entry.appliedReportedUtc == null ? "warning" : "success")">@(entry.appliedReportedUtc == null ? "Unconfirmed" : "Reported applied")</span><small>@entry.rotationId</small></span><span class="history-chevron">›</span></a>
 }
 </div>
 @if (Model.Entries.Length == 0) {<div class="empty-panel"><h3>No password versions yet</h3><p>The first successful agent backup will appear here.</p></div>}
 @if (Model.SelectedRecord != null)
 {
-<section class="recovery-card"><h3>Recover selected version</h3><p class="mono">@Model.Rotation</p><dl><dt>Recovery certificate SHA-256</dt><dd class="mono fingerprint">@Model.SelectedRecord.Envelope.recipientSha256</dd></dl><a class="button secondary inline" href="download?device=@Model.Device&amp;rotation=@Model.Rotation">Download encrypted envelope</a><form method="post"><button class="button" name="action" value="reveal" type="submit">Reveal password</button></form>
+<section class="recovery-card"><h3>Selected version</h3><p class="mono">@Model.Rotation</p><dl><dt>Recovery certificate SHA-256</dt><dd class="mono fingerprint">@Model.SelectedRecord.Envelope.recipientSha256</dd></dl>
+<div class="form-actions">@if (Model.Options.EnableWebDecryption && Model.Secret == null) {<form method="post" action="@Model.DeviceUrl(Model.Device, "history", Model.Rotation, false)" asp-antiforgery="true"><button class="button" name="action" value="reveal" type="submit">Show password</button></form>}<a class="button secondary" href="download?device=@Model.Device&amp;rotation=@Model.Rotation">Download encrypted envelope</a></div>
 @if (!string.IsNullOrEmpty(Model.Message)) {<p class="notice">@Model.Message</p>}
-@if (Model.Secret != null) {<div class="secret"><strong>@Model.Account</strong><code>@Model.Secret</code><p>Close this page after use.</p></div>}
+@Model.Revealed(Model.Rotation)
 </section>
 }
+}
+else
+{
+<section class="detail-section"><h3>Device information</h3><dl><dt>Device name</dt><dd>@selected.Name</dd><dt>Device ID</dt><dd class="mono">@Model.Device</dd><dt>Last backup</dt><dd>@PortalPage.DateLabel(selected.LastBackupUtc) @(selected.LastBackupUtc == null ? "" : "UTC")</dd><dt>Last applied report</dt><dd>@PortalPage.DateLabel(selected.LastAppliedUtc) @(selected.LastAppliedUtc == null ? "" : "UTC")</dd><dt>Retained versions</dt><dd>@Model.Entries.Length of @Model.Limit</dd></dl></section>
+<section class="detail-section"><h3>Protection</h3><dl><dt>Password encryption</dt><dd>AES-256-GCM</dd><dt>Recovery key protection</dt><dd>RSA-OAEP-SHA256</dd><dt>Agent certificate SHA-256</dt><dd class="mono fingerprint">@selected.CertificateSha256</dd><dt>Storage</dt><dd>@(Model.Store.IsPostgres ? "PostgreSQL" : "SQLite") database</dd></dl><p class="helper">Records are encrypted for the recovery certificate. Its private key is stored encrypted with the server's master key, not in plain form.</p></section>
 }
 </div><footer class="drawer-footer">Encrypted recovery · Access is audited</footer></aside>
 }

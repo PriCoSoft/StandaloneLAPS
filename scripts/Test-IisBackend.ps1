@@ -12,8 +12,8 @@ try {
     $testAssembly = Join-Path $work 'FrameworkTests.dll'
     $sources = @(Get-ChildItem -LiteralPath (Join-Path $backend 'App_Code') -Filter '*.cs' -File | ForEach-Object { $_.FullName })
     $sources += @(Get-ChildItem -LiteralPath (Join-Path $root 'src\StandaloneLaps.Agent.Framework') -Filter '*.cs' -File | ForEach-Object { $_.FullName })
-    $sources += @((Join-Path $root 'tests\FrameworkTests.cs'), (Join-Path $root 'tests\FrameworkAgentTests.cs'), (Join-Path $root 'tests\FrameworkPortalTests.cs'))
-    & $compiler /nologo /target:library /langversion:5 /warnaserror+ "/out:$testAssembly" /reference:System.Web.dll /reference:System.Web.Extensions.dll /reference:System.Configuration.dll /reference:System.Core.dll /reference:System.ServiceProcess.dll /reference:System.Runtime.Serialization.dll /reference:System.IO.Compression.dll $sources
+    $sources += @((Join-Path $root 'tests\FrameworkTests.cs'), (Join-Path $root 'tests\FrameworkAgentTests.cs'), (Join-Path $root 'tests\FrameworkPortalTests.cs'), (Join-Path $root 'tests\FrameworkWindowsLapsTests.cs'))
+    & $compiler /nologo /target:library /langversion:5 /warnaserror+ "/out:$testAssembly" /reference:System.Web.dll /reference:System.Web.Extensions.dll /reference:System.Configuration.dll /reference:System.Core.dll /reference:System.ServiceProcess.dll /reference:System.Runtime.Serialization.dll /reference:System.IO.Compression.dll /reference:System.DirectoryServices.Protocols.dll /reference:System.Security.dll $sources
     if ($LASTEXITCODE -ne 0) { throw 'Framework source compilation failed.' }
     & (Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -File (Join-Path $PSScriptRoot 'Run-FrameworkTests.ps1') -AssemblyPath $testAssembly -FixtureDirectory $work
     if ($LASTEXITCODE -ne 0) { throw 'Framework tests failed.' }

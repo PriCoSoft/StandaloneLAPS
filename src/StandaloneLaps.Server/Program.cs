@@ -66,6 +66,7 @@ namespace StandaloneLaps.Server
             builder.Services.AddSingleton(keys);
             builder.Services.AddSingleton<ClientPackages>();
             builder.Services.AddSingleton<AgentApi>();
+            builder.Services.AddSingleton(new WindowsLapsService(options));
             // Session cookies and antiforgery tokens are protected with in-memory keys: a restart signs everybody out,
             // and nothing in the data volume can be used to forge a portal session.
             builder.Services.AddDataProtection().UseEphemeralDataProtectionProvider();

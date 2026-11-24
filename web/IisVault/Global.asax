@@ -11,7 +11,7 @@ void Application_BeginRequest(object sender, EventArgs e)
     Response.Headers["X-Content-Type-Options"] = "nosniff";
     Response.Headers["X-Frame-Options"] = "DENY";
     Response.Headers["Referrer-Policy"] = "no-referrer";
-    Response.Headers["Content-Security-Policy"] = "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+    Response.Headers["Content-Security-Policy"] = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
     if (!Request.IsSecureConnection) { Deny("HTTPS is required."); return; }
     // Only the certificate-authenticated agent API is reachable from outside PortalAllowedNetworks (e.g. the DMZ).
     var isApi = string.Equals(Request.AppRelativeCurrentExecutionFilePath, "~/api.aspx", StringComparison.OrdinalIgnoreCase);

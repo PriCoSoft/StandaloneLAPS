@@ -426,7 +426,7 @@ namespace StandaloneLapsWeb
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
-        private static void WriteReplace(string path, string content)
+        public static void WriteReplace(string path, string content)
         {
             var temporary = Path.Combine(Path.GetDirectoryName(path), Guid.NewGuid().ToString("N") + ".tmp");
             try
@@ -438,9 +438,18 @@ namespace StandaloneLapsWeb
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
+        // Directory (Windows LAPS) lookups: the target is an AD objectGUID/DN or an Entra device ID, not a SLAPS device.
+        public static void AuditTarget(string actor, string action, string target)
+        {
+            AppendAudit(Json.Serialize(new { utc = DateTimeOffset.UtcNow.ToString("O"), actor = actor, action = action, target = target }) + Environment.NewLine);
+        }
         public static void Audit(string actor, string action, Guid device, Guid rotation)
         {
             var line = Json.Serialize(new { utc = DateTimeOffset.UtcNow.ToString("O"), actor = actor, action = action, deviceId = device, rotationId = rotation }) + Environment.NewLine;
+            AppendAudit(line);
+        }
+        private static void AppendAudit(string line)
+        {
             lock (Gate)
             {
                 var bytes = Encoding.UTF8.GetBytes(line);

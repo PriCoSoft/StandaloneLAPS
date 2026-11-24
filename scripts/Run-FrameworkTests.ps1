@@ -11,6 +11,10 @@ $entry.SetAttribute('key', 'VaultDataDirectory')
 if (-not $DataDirectory) { $DataDirectory = Join-Path $FixtureDirectory 'vault' }
 $entry.SetAttribute('value', $DataDirectory)
 $appSettings.AppendChild($entry) | Out-Null
+# Windows LAPS Entra setup tests (FrameworkWindowsLapsTests): fixed test IDs, no network access (fake transport).
+foreach ($pair in @(@('WindowsLapsEntraTenantId', '11111111-2222-3333-4444-555555555555'), @('WindowsLapsEntraClientId', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'))) {
+    $extra = $document.CreateElement('add'); $extra.SetAttribute('key', $pair[0]); $extra.SetAttribute('value', $pair[1]); $appSettings.AppendChild($extra) | Out-Null
+}
 $configuration.AppendChild($appSettings) | Out-Null
 $document.AppendChild($configuration) | Out-Null
 $document.Save($configPath)

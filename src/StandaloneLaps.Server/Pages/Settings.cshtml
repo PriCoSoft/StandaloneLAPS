@@ -54,13 +54,44 @@ else
 }
 </section>
 
+<section class="form-card settings-card" id="windows-laps">
+<h2 class="card-title">Windows LAPS lookup</h2>
+<p class="helper tight">Read-only lookup of passwords that Windows LAPS or legacy Microsoft LAPS stored in Active Directory or Microsoft Entra ID. Switched with environment variables (<code>Slaps__WindowsLaps*</code>); allowed for <strong>@(options.WindowsLaps.ReaderAllowed ? "readers and administrators" : "administrators only")</strong>.</p>
+@if (!string.IsNullOrEmpty(Model.LapsTest)) {<p class="notice success">@Model.LapsTest</p>}
+@if (!string.IsNullOrEmpty(Model.LapsTestError)) {<p class="notice danger">@Model.LapsTestError</p>}
+@{ var laps = options.WindowsLaps; }
+<div class="certificate">
+<div class="certificate-head"><h3>Active Directory</h3><span class="badge @(laps.AdEnabled ? "success" : "neutral")"><span></span>@(laps.AdEnabled ? "On" : "Off")</span></div>
+<dl>
+<dt>Domain controller</dt><dd>@(laps.AdServer ?? "Located automatically (Windows host)")</dd>
+<dt>Search base</dt><dd class="mono">@(laps.AdSearchBase ?? "Whole domain")</dd>
+<dt>Connection</dt><dd>@(laps.AdUseSsl ? "LDAPS" : "LDAP") port @laps.EffectivePort@(string.IsNullOrEmpty(laps.AdCaDirectory) ? "" : ", CA directory " + laps.AdCaDirectory)</dd>
+<dt>Service account</dt><dd>@(laps.AdUsername ?? "Process identity")</dd>
+<dt>Reads</dt><dd>@string.Join(", ", new[] { laps.AdLegacy ? "legacy LAPS (ms-Mcs-AdmPwd)" : null, laps.AdModern ? "Windows LAPS" + (laps.AdDecrypt ? " incl. encrypted" : " (clear text only)") : null, laps.AdModern && laps.AdHistory ? "password history" : null }.Where(s => s != null))</dd>
+<dt>Decryption</dt><dd>@(laps.UsePython ? "Python dpapi-ng (" + laps.Python + ", auth " + laps.DecryptAuth + ", key server " + (laps.DecryptServer ?? laps.AdServer) + ")" : "Windows DPAPI-NG (process identity)")</dd>
+</dl>
+@if (identity.IsAdmin && laps.AdEnabled) {<form method="post"><button class="button secondary" type="submit" name="action" value="test-ad">Test Active Directory connection</button></form>}
+</div>
+<div class="certificate">
+<div class="certificate-head"><h3>Microsoft Entra ID</h3><span class="badge @(laps.EntraEnabled ? "success" : "neutral")"><span></span>@(laps.EntraEnabled ? "On" : "Off")</span></div>
+<dl>
+<dt>Tenant ID</dt><dd class="mono">@laps.EntraTenantId</dd>
+<dt>Application (client) ID</dt><dd class="mono">@laps.EntraClientId</dd>
+<dt>Credential</dt><dd>@(!string.IsNullOrEmpty(laps.EntraCertificatePath) ? "Certificate " + laps.EntraCertificatePath : !string.IsNullOrEmpty(laps.EntraClientSecret) ? "Client secret" : "Not configured")</dd>
+<dt>Permission</dt><dd>Microsoft Graph <code>DeviceLocalCredential.Read.All</code> (application, admin consent)</dd>
+<dt>History</dt><dd>@(laps.EntraHistory ? "Older passwords are shown" : "Only the current password")</dd>
+</dl>
+@if (identity.IsAdmin && laps.EntraEnabled) {<form method="post"><button class="button secondary" type="submit" name="action" value="test-entra">Test Entra connection</button></form>}
+</div>
+</section>
+
 <section class="form-card settings-card">
-<h2 class="card-title">About</h2>
-<dl class="summary-list">
+<h2 class="card-title">About</h2><dl class="summary-list">
 <dt>SLAPS server version</dt><dd>@StandaloneLapsWeb.AppVersion.Number (container)</dd>
 <dt>Agent in client packages</dt><dd>@Model.AgentVersion</dd>
 <dt>Sign-in</dt><dd>@(options.DevelopmentAuth ? "Development (loopback only)" : "OpenID Connect, roles " + options.AdminRole + " / " + options.ReaderRole)</dd>
 <dt>Password reveal in browser</dt><dd>@(options.EnableWebDecryption ? "Enabled" : "Disabled")</dd>
+<dt>Windows LAPS lookup</dt><dd>@(options.WindowsLaps.Enabled ? string.Join(" + ", new[] { options.WindowsLaps.AdEnabled ? "Active Directory (decryption: " + (options.WindowsLaps.UsePython ? "Python dpapi-ng" : "Windows DPAPI-NG") + ")" : null, options.WindowsLaps.EntraEnabled ? "Microsoft Entra ID" : null }.Where(s => s != null)) + (options.WindowsLaps.ReaderAllowed ? " · readers and administrators" : " · administrators only") : "Disabled")</dd>
 <dt>Database</dt><dd>@(Model.Store.IsPostgres ? "PostgreSQL" : "SQLite")</dd>
 @if (identity.IsAdmin)
 {

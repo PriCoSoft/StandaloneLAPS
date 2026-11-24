@@ -225,6 +225,27 @@ namespace StandaloneLapsWeb
 
         public static string SignOutUrl { get { return "https://login.microsoftonline.com/" + TenantId + "/oauth2/v2.0/logout"; } }
 
+        // ---- Admin consent for the Graph (Windows LAPS) application permission ------------------------
+        // Entra returns to signin.aspx (already registered as redirect URI) with admin_consent/error and our state.
+
+        private const string ConsentPurpose = "StandaloneLaps.AdminConsent.v1";
+
+        public static string AdminConsentUrl(string tenantId, string clientId)
+        {
+            var data = new Dictionary<string, string> { { "c", "consent" }, { "e", DateTime.UtcNow.AddMinutes(15).Ticks.ToString(CultureInfo.InvariantCulture) } };
+            return "https://login.microsoftonline.com/" + tenantId + "/v2.0/adminconsent?client_id=" + Uri.EscapeDataString(clientId) +
+                "&scope=" + Uri.EscapeDataString("https://graph.microsoft.com/.default") + "&redirect_uri=" + Uri.EscapeDataString(RedirectUri) +
+                "&state=" + Protect(Vault.Json.Serialize(data), ConsentPurpose);
+        }
+
+        public static bool ValidConsentState(string state)
+        {
+            if (string.IsNullOrEmpty(state) || state.Length > 2000) return false;
+            var data = ReadProtected(state, ConsentPurpose);
+            string kind;
+            return data != null && Fresh(data, DateTime.UtcNow) && data.TryGetValue("c", out kind) && kind == "consent";
+        }
+
         // ---- Helpers --------------------------------------------------------------------------------
 
         private static string CookiePath { get { var path = HttpRuntime.AppDomainAppVirtualPath; return string.IsNullOrEmpty(path) ? "/" : path; } }

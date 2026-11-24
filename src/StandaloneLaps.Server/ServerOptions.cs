@@ -36,6 +36,7 @@ public sealed class ServerOptions
     public string AdminRole { get; init; } = "SLAPS.Admin";
     public string ReaderRole { get; init; } = "SLAPS.Reader";
     public string ServerName { get; init; }
+    public WindowsLapsOptions WindowsLaps { get; init; } = new();
 
     public const string PrivateNetworks = "10.0.0.0/8;172.16.0.0/12;192.168.0.0/16;127.0.0.0/8;::1/128;fc00::/7";
 
@@ -89,8 +90,37 @@ public sealed class ServerOptions
             OidcIdClaim = Value("OidcIdClaim") ?? "oid",
             AdminRole = Value("AdminRole") ?? "SLAPS.Admin",
             ReaderRole = Value("ReaderRole") ?? "SLAPS.Reader",
-            ServerName = Value("ServerName")
+            ServerName = Value("ServerName"),
+            WindowsLaps = new WindowsLapsOptions
+            {
+                ReaderAllowed = string.Equals(Value("WindowsLapsRequiredRole"), "Reader", StringComparison.OrdinalIgnoreCase),
+                AdEnabled = Flag("WindowsLapsAdEnabled", false),
+                AdServer = Value("WindowsLapsAdServer"),
+                AdUseSsl = Flag("WindowsLapsAdUseSsl", true),
+                AdPort = Number("WindowsLapsAdPort", 0),
+                AdSearchBase = Value("WindowsLapsAdSearchBase"),
+                AdUsername = Value("WindowsLapsAdUsername"),
+                AdPassword = Secret("WindowsLapsAdPassword"),
+                AdCaDirectory = Value("WindowsLapsAdCaDirectory"),
+                AdLegacy = Flag("WindowsLapsAdLegacy", true),
+                AdModern = Flag("WindowsLapsAdModern", true),
+                AdDecrypt = Flag("WindowsLapsAdDecrypt", true),
+                AdHistory = Flag("WindowsLapsAdHistory", true),
+                DecryptMode = Value("WindowsLapsAdDecryptMode") ?? "auto",
+                DecryptServer = Value("WindowsLapsAdDecryptServer"),
+                DecryptAuth = Value("WindowsLapsAdDecryptAuth") ?? "negotiate",
+                Python = Value("WindowsLapsPython") ?? "python3",
+                DpapiScript = Value("WindowsLapsDpapiScript") ?? Path.Combine(AppContext.BaseDirectory, "dpapi", "slaps_dpapi_ng.py"),
+                EntraEnabled = Flag("WindowsLapsEntraEnabled", false),
+                EntraTenantId = Value("WindowsLapsEntraTenantId") ?? TenantFromAuthority(Value("OidcAuthority")),
+                EntraClientId = Value("WindowsLapsEntraClientId") ?? Value("OidcClientId"),
+                EntraClientSecret = Secret("WindowsLapsEntraClientSecret"),
+                EntraCertificatePath = Value("WindowsLapsEntraCertificatePath"),
+                EntraCertificatePassword = Secret("WindowsLapsEntraCertificatePassword"),
+                EntraHistory = Flag("WindowsLapsEntraHistory", true)
+            }
         };
+        options.WindowsLaps.Validate();
         if (options.PortalPort == options.AgentPort) throw new InvalidOperationException("Slaps:PortalPort and Slaps:AgentPort must differ: the agent port requires client certificates.");
         if (!options.IsPostgres && !string.Equals(options.DatabaseProvider, "sqlite", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Slaps:DatabaseProvider must be sqlite or postgresql.");
@@ -106,6 +136,13 @@ public sealed class ServerOptions
             throw new InvalidOperationException("Set Slaps__OidcAuthority (e.g. https://login.microsoftonline.com/<tenant-id>/v2.0) and Slaps__OidcClientId.");
         if (PublicUrl == null) throw new InvalidOperationException("Set Slaps__PublicUrl to the portal URL, e.g. https://slaps.example.com:8443/.");
         if (AgentApiUrl == null) throw new InvalidOperationException("Set Slaps__AgentApiUrl to the agent API URL written into client packages, e.g. https://slaps.example.com:8444/.");
+    }
+
+    private static string TenantFromAuthority(string authority)
+    {
+        if (!Uri.TryCreate(authority, UriKind.Absolute, out var uri)) return null;
+        var first = uri.AbsolutePath.Trim('/').Split('/')[0];
+        return Guid.TryParse(first, out var tenant) ? tenant.ToString("D") : null;
     }
 
     private static string BaseUrl(string value, string name)

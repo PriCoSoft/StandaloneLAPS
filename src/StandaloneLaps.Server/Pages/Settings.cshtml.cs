@@ -7,11 +7,16 @@ public sealed class SettingsModel : PortalPage
     private readonly KeyVault keys;
     private readonly ClientPackages packages;
 
-    public SettingsModel(VaultStore store, ServerOptions options, KeyVault keys, ClientPackages packages) : base(store, options)
+    private readonly WindowsLapsService laps;
+
+    public SettingsModel(VaultStore store, ServerOptions options, KeyVault keys, ClientPackages packages, WindowsLapsService laps) : base(store, options)
     {
         this.keys = keys;
         this.packages = packages;
+        this.laps = laps;
     }
+
+    public string LapsTest, LapsTestError;
 
     public override string Active => "settings";
     public string ErrorText, SavedText;
@@ -29,9 +34,17 @@ public sealed class SettingsModel : PortalPage
 
     public void OnGet() => Load(null);
 
-    public IActionResult OnPost(string action, string historyLimit, string confirmTrim)
+    public async Task<IActionResult> OnPost(string action, string historyLimit, string confirmTrim)
     {
         if (!Identity.IsAdmin) return Forbid();
+        if (action is "test-ad" or "test-entra")
+        {
+            try { LapsTest = action == "test-ad" ? await Task.Run(laps.TestAd) : await laps.TestEntra(); }
+            catch (WindowsLapsException ex) { LapsTestError = ex.Message; }
+            Store.Audit(Identity.Actor, "windows-laps-" + action + (LapsTestError == null ? "-ok" : "-failed"), Guid.Empty, Guid.Empty);
+            Load(null);
+            return Page();
+        }
         if (action != "history-limit") return BadRequest("Unsupported request.");
         var previous = Store.HistoryLimit;
         if (!int.TryParse(historyLimit, out var requested) || requested < ServerOptions.MinHistoryLimit || requested > ServerOptions.MaxHistoryLimit)

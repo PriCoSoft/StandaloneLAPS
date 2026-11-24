@@ -155,12 +155,53 @@ Rotation order: generate → encrypt → upload → server stores durably → re
 
 ## View history and recover passwords
 
-Open `https://slaps.example.com/` from an internal network and sign in. Search devices by name or ID; a device opens a drawer with *Overview* and *Password history* (up to the configured limit, newest first). “Reported applied” is the agent's statement, not an independent check; unconfirmed candidates are kept for crash recovery. Consider account lockout when trying historical candidates.
+Open `https://slaps.example.com/` from an internal network and sign in. Search devices by name or ID; a device opens a drawer with three tabs: *Password* (default: the newest version with one **Show password** button; if that version is not confirmed yet, the last confirmed password is offered right below it), *History* (all retained versions, newest first, each can be revealed or downloaded) and *Details* (device and protection data). A revealed password is masked until *Show*; *Copy* buttons copy the username and the password to the clipboard (copying itself is not audited, revealing is). “Reported applied” is the agent's statement, not an independent check; unconfirmed candidates are kept for crash recovery. Consider account lockout when trying historical candidates.
 
 - **Reveal password** (web): decrypts with the recovery key on the IIS server (`EnableWebDecryption=true`, set by the installer). Every attempt is audited.
 - **Offline recovery**: download the encrypted envelope and run `StandaloneLaps.Agent.exe recover envelope.json recovery.pfx` on a recovery workstation with the backup PFX.
 
 Administrators can delete a device (recoverable: tombstone blocks the agent, history is archived under `_deleted`) and restore it. Readers cannot manage devices. Reveal, delete, restore and Add client use session-bound CSRF tokens; deletion requires typing the device name. The portal HTML-encodes output, forbids caching and framing and logs access and management actions to `App_Data\Vault\audit.jsonl` (ordinary protected storage, not a tamper-evident log).
+
+## Windows LAPS lookup (Active Directory and Entra ID)
+
+Optionally, the portal also **reads** passwords that Windows LAPS or legacy Microsoft LAPS stored for domain-joined or Entra-joined computers (menu *Windows LAPS*). SLAPS never stores, rotates or writes these passwords; it reads them live, decrypts them on the server if needed and shows them with the same *Show* / *Copy* buttons. Search and reveal are audited (`windows-laps-search`, `windows-laps-reveal-ad|entra` in `audit.jsonl`). Each source is switched on separately; everything is off by default.
+
+| Source | Attributes / API | Needs |
+| --- | --- | --- |
+| AD, legacy Microsoft LAPS | `ms-Mcs-AdmPwd`, `ms-Mcs-AdmPwdExpirationTime` | Read permission on the confidential attribute (`Set-AdmPwdReadPasswordPermission`) |
+| AD, Windows LAPS (clear text) | `msLAPS-Password` (JSON), `msLAPS-PasswordExpirationTime` | `Set-LapsADReadPasswordPermission` for the OUs |
+| AD, Windows LAPS (encrypted) | `msLAPS-EncryptedPassword`, `…EncryptedPasswordHistory`, `…EncryptedDSRMPassword(History)` | Read permission **and** membership in the group named in the LAPS policy *Configure authorized password decryptors* (`ADPasswordEncryptionPrincipal`, default Domain Admins); domain functional level 2016, reachable DC |
+| Entra ID | Microsoft Graph `directory/deviceLocalCredentials` | Application permission `DeviceLocalCredential.Read.All` with admin consent |
+
+**IIS (Windows, native):** the application pool identity does everything. LDAP uses Kerberos with signing and sealing (or LDAPS with `WindowsLapsAdUseSsl=true`), encrypted passwords are decrypted with `NCryptUnprotectSecret` (DPAPI-NG, like `Get-LapsADPassword`). The IIS server must be domain-joined. Recommended: run the pool as a gMSA, grant it read permission only on the OUs that should be visible, and add it to a dedicated decryptor group (only one principal per policy, so the group should contain your LAPS admins and the gMSA). With `ApplicationPoolIdentity` the server's computer account is used on the network.
+
+The search lists only computers that have a stored password the server can read (presence filter on `ms-Mcs-AdmPwd`, `msLAPS-Password`, `msLAPS-EncryptedPassword`, `msLAPS-EncryptedDSRMPassword`), shows the AD `description`, which kinds are stored (Windows LAPS / legacy LAPS) and the expiry. In mixed operation (legacy and Windows LAPS on the same computer, e.g. during migration) both passwords are shown, each labelled. All tables in the portal can be sorted (click a header) and resized (drag the header edge, double-click resets); both are remembered per browser.
+
+Entra lookup uses app-only access (client credentials) of an app registration — the SLAPS sign-in app or a separate one (`WindowsLapsEntraTenantId`/`WindowsLapsEntraClientId`, default: the sign-in values). Easiest: **Settings → Windows LAPS lookup → Open Entra setup** (administrators):
+
+1. *Create certificate*: SLAPS creates a one-year RSA 2048 certificate; the PFX is stored in `App_Data\Vault\entra-app-credential.json`, protected with the site's `machineKey` (keep web.config and App_Data together in backups). Download the public `.cer`.
+2. Upload the `.cer` to the app registration (*Certificates & secrets*), add the Graph application permission `DeviceLocalCredential.Read.All` (*API permissions*) and click *Grant admin consent* (in SLAPS or in Entra). The consent returns to `signin.aspx`, which is already a redirect URI of the sign-in app.
+3. Enter the app registration's **Object ID**: then SLAPS renews the certificate by itself 30 days before expiry (Graph `addKey` with a proof signed by the current certificate — no extra permission needed), switches over once Entra accepts the new key and removes the previous key it had added (the first, manually uploaded certificate simply expires). Problems are shown on the Settings page.
+4. *Test connection*.
+
+Alternatives: a certificate in LocalMachine\My (`WindowsLapsEntraCertificateThumbprint`, takes precedence; renew it yourself) or a client secret (`WindowsLapsEntraClientSecret`). Graph is reached directly or via `OutboundProxyUrl`. The Settings page shows the AD and Entra configuration (domain controller, search base, identity, credential, certificate expiry) and has *Test connection* buttons.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `WindowsLapsRequiredRole` | `Admin` | `Admin` or `Reader`: who may search and reveal directory passwords |
+| `WindowsLapsAdEnabled` | `false` | Active Directory lookup |
+| `WindowsLapsAdServer` | empty | DC or domain DNS name; empty = domain of the IIS server |
+| `WindowsLapsAdSearchBase` | empty | Limit to an OU (DN); empty = whole domain (`defaultNamingContext`) |
+| `WindowsLapsAdUseSsl` | `false` | LDAPS (636) instead of Kerberos-sealed LDAP (389) |
+| `WindowsLapsAdLegacy` / `WindowsLapsAdModern` | `true` / `true` | Read legacy `ms-Mcs-AdmPwd` / Windows LAPS attributes |
+| `WindowsLapsAdDecrypt` | `true` | Decrypt encrypted Windows LAPS passwords |
+| `WindowsLapsAdHistory` | `true` | Also read the encrypted password history |
+| `WindowsLapsEntraEnabled` | `false` | Microsoft Entra ID lookup via Graph |
+| `WindowsLapsEntraTenantId`, `WindowsLapsEntraClientId` | sign-in values | App registration for Graph |
+| `WindowsLapsEntraCertificateThumbprint` / `WindowsLapsEntraClientSecret` | empty | Client credential (certificate recommended) |
+| `WindowsLapsEntraHistory` | `true` | Show older Entra passwords too |
+
+The container server offers the same lookup; on Linux it uses LDAPS with a service account and the Python library dpapi-ng for decryption (see [docs/Container.md](docs/Container.md#windows-laps-lookup)).
 
 ## Settings page
 
@@ -188,6 +229,7 @@ PowerShell alternative with a reader certificate (certificate mode): `scripts\Ge
 | `CrlDistributionUrl` | URL written into agent certificates; the CRL itself is preinstalled locally on the IIS server. |
 | `EnableWebDecryption` | `true` enables Reveal password. |
 | `RecoveryCertificateSha256` | Semicolon list; the first entry is the recipient for new packages, later entries are historical keys that can still be revealed. |
+| `WindowsLaps*` | Optional read-only Windows LAPS lookup, see [Windows LAPS lookup](#windows-laps-lookup-active-directory-and-entra-id). All off by default. |
 
 Static agents, readers or admins (certificate mode) can still be listed in `App_Data\clients.json`; portal-added clients are stored in `App_Data\Vault\_clients\<device>.json`.
 
@@ -226,7 +268,7 @@ The scripts use the Windows-supplied .NET Framework compiler and `aspnet_compile
 
 ## Limits
 
-File storage without SQL/HA; audit is not tamper-evident; no automatic purge of deleted-device archives. The SLAPS CA and recovery keys live on the IIS server (non-exportable, which only blocks casual copies): an attacker who controls that server can decrypt stored passwords and issue agent certificates. Passwords briefly exist in managed memory. Back up `App_Data\Vault` and the key backups independently; application startup trims histories to the configured limit (default 20).
+The Windows LAPS lookup (1.6.0) is tested with synthetic data and a local DPAPI-NG round trip only, not yet against a real domain or tenant. File storage without SQL/HA; audit is not tamper-evident; no automatic purge of deleted-device archives. The SLAPS CA and recovery keys live on the IIS server (non-exportable, which only blocks casual copies): an attacker who controls that server can decrypt stored passwords and issue agent certificates. Passwords briefly exist in managed memory. Back up `App_Data\Vault` and the key backups independently; application startup trims histories to the configured limit (default 20).
 
 See [Storage, encryption and migration](docs/Migration.md) for the data layout and moving to another server.
 

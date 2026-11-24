@@ -20,6 +20,11 @@
   <ItemGroup>
     <!-- Single version source shared with the IIS portal and the agent. -->
     <Compile Include="..\..\web\IisVault\App_Code\AppVersion.cs" Link="AppVersion.cs" />
+    <!-- Windows LAPS attribute formats and native DPAPI-NG, shared with the IIS portal. -->
+    <Compile Include="..\..\web\IisVault\App_Code\WindowsLaps.cs" Link="WindowsLaps.cs" />
+    <None Include="..\..\web\IisVault\copy.js" Link="assets\copy.js" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- DPAPI-NG helper for Linux (Python dpapi-ng), see container/Dockerfile. -->
+    <None Include="..\..\container\dpapi\slaps_dpapi_ng.py" Link="dpapi\slaps_dpapi_ng.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- Same look as the IIS portal: style sheet and icons are linked, not copied. -->
     <None Include="..\..\web\IisVault\style.css" Link="assets\style.css" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\web\IisVault\icon.svg" Link="assets\icon.svg" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
@@ -30,5 +35,6 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.15" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.15" />
     <PackageReference Include="Npgsql" Version="10.0.3" />
+    <PackageReference Include="System.DirectoryServices.Protocols" Version="10.0.15" />
   </ItemGroup>
 </Project>
