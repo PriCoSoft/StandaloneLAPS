@@ -175,7 +175,7 @@ from the imported client list.
 
 ## Windows LAPS lookup
 
-Like the IIS portal (see README, "Windows LAPS lookup"), the container can **read** Windows LAPS and legacy LAPS passwords from Active Directory and Microsoft Entra ID. Everything is off by default; search and reveal are audited.
+Like the IIS portal (see README, "Windows LAPS lookup"), the container can **read** Windows LAPS and legacy LAPS passwords from Active Directory and Microsoft Entra ID and, optionally, let administrators expire them (AD) or rotate them via Intune (Entra). Everything is off by default; search, reveal, expire and rotate are audited.
 
 **Active Directory on Linux** works like [LAPS-WebUI](https://seji64.github.io/LAPS-WebUI/):
 
@@ -209,7 +209,7 @@ Like the IIS portal (see README, "Windows LAPS lookup"), the container can **rea
 
 ## Limits
 
-- Windows LAPS lookup (1.6.0): the Python dpapi-ng path, LDAPS on Linux and the Docker image build have not been run yet (no Docker/Python on the development host); Graph and the helper protocol are tested with fakes.
+- Windows LAPS lookup (1.6.x): the image build incl. Python dpapi-ng and libldap is verified by the release workflow (smoke test), but decryption against a real domain controller, LDAPS on Linux, Intune rotation and the Entra setup against a real tenant have not been run yet; Graph and the helper protocol are tested with fakes.
 - One container instance per database (write serialization and API rate limit are in-process).
 - The portal has no local accounts: an OpenID Connect provider is required.
 - Development sign-in (`Slaps__AuthMode=Development`) works only with `ASPNETCORE_ENVIRONMENT=Development` and only

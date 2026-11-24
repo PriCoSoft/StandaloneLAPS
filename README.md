@@ -6,7 +6,7 @@ Everything targets **.NET Framework 4.7.2**, which ships with Windows Server 201
 
 **Download:** ready-to-install, code-signed server packages (`StandaloneLaps-Server-<version>-<timestamp>.zip`, including the Windows and Linux agents) are attached to the [GitHub releases](../../releases). Building from source is only needed for changes.
 
-**Docker alternative (1.5.0):** instead of IIS, the server can run as a container with SQLite or PostgreSQL storage and any OpenID Connect provider (`StandaloneLaps-Container-<version>-<timestamp>.zip`). Same agents, same client packages, same encryption. See [docs/Container.md](docs/Container.md).
+**Docker alternative (1.5.0):** instead of IIS, the server can run as a container with SQLite or PostgreSQL storage and any OpenID Connect provider (`StandaloneLaps-Container-<version>-<timestamp>.zip`). Same agents, same client packages, same encryption. Since 1.6.2 every release is also published as a ready-made image `ghcr.io/pricosoft/standalonelaps` (tags `<version>`, `1.6`, `1`, `latest`) for automatic updates. See [docs/Container.md](docs/Container.md).
 
 ## Architecture
 
@@ -164,7 +164,7 @@ Administrators can delete a device (recoverable: tombstone blocks the agent, his
 
 ## Windows LAPS lookup (Active Directory and Entra ID)
 
-Optionally, the portal also **reads** passwords that Windows LAPS or legacy Microsoft LAPS stored for domain-joined or Entra-joined computers (menu *Windows LAPS*). SLAPS never stores, rotates or writes these passwords; it reads them live, decrypts them on the server if needed and shows them with the same *Show* / *Copy* buttons. Search and reveal are audited (`windows-laps-search`, `windows-laps-reveal-ad|entra` in `audit.jsonl`). Each source is switched on separately; everything is off by default.
+Optionally, the portal also **reads** passwords that Windows LAPS or legacy Microsoft LAPS stored for domain-joined or Entra-joined computers (menu *Windows LAPS*). SLAPS never stores or writes these passwords (administrators can optionally let them expire, see `WindowsLapsAdAllowExpire` / `WindowsLapsEntraAllowRotate` below); it reads them live, decrypts them on the server if needed and shows them with the same *Show* / *Copy* buttons. Search and reveal are audited (`windows-laps-search`, `windows-laps-reveal-ad|entra` in `audit.jsonl`). Each source is switched on separately; everything is off by default.
 
 | Source | Attributes / API | Needs |
 | --- | --- | --- |
@@ -211,7 +211,10 @@ The container server offers the same lookup; on Linux it uses LDAPS with a servi
 
 - **Password history:** versions kept per device, 2–100 (default 20), stored in `App_Data\Vault\settings.json`. Raising takes effect immediately. Lowering requires a confirmation and **permanently deletes** versions above the new limit on all active devices (the most recent version reported as applied is always kept). Deleted devices are trimmed when restored. Changes are audited. A damaged `settings.json` stops the portal instead of falling back to a smaller limit; fix or delete it (delete = default 20).
 - **Certificates:** SLAPS CA and current/previous recovery certificates with subject, validity, key size, private-key status (accessible, exportable or not) and fingerprints. The public part can be downloaded as `.cer` (DER) or `.pem`; downloads are audited. Private keys are never offered.
+- **Windows LAPS lookup:** state of the AD and Entra lookup (domain controller, search base, connection, identity, what is read, expire/rotate, Graph credential and certificate expiry, consent), *Test connection* buttons (results appear in place) and, for administrators, the link to the **Entra setup**.
 - **About:** portal version, agent version in the client packages, sign-in mode, reveal setting; for admins also public URL, portal networks and .NET runtime.
+
+**Diagnostics:** unexpected errors show only a reference ID in the browser; type, message and stack trace are written to `App_Data\Vault\errors.log` on the server (rotated at 1 MB to `errors.old.log`). Look up the reference there.
 
 The version number (single source: `web\IisVault\App_Code\AppVersion.cs`, also stamped into the agent and the package name) is shown in the navigation and on the Settings page. The installer prints the old and new version on an upgrade.
 
@@ -231,7 +234,7 @@ PowerShell alternative with a reader certificate (certificate mode): `scripts\Ge
 | `CrlDistributionUrl` | URL written into agent certificates; the CRL itself is preinstalled locally on the IIS server. |
 | `EnableWebDecryption` | `true` enables Reveal password. |
 | `RecoveryCertificateSha256` | Semicolon list; the first entry is the recipient for new packages, later entries are historical keys that can still be revealed. |
-| `WindowsLaps*` | Optional read-only Windows LAPS lookup, see [Windows LAPS lookup](#windows-laps-lookup-active-directory-and-entra-id). All off by default. |
+| `WindowsLaps*` | Optional Windows LAPS lookup (read; optional expire/rotate for administrators), see [Windows LAPS lookup](#windows-laps-lookup-active-directory-and-entra-id). All off by default. |
 
 Static agents, readers or admins (certificate mode) can still be listed in `App_Data\clients.json`; portal-added clients are stored in `App_Data\Vault\_clients\<device>.json`.
 
@@ -255,7 +258,7 @@ Requests are limited to 64 KiB and 60 calls per minute per certificate and worke
 ## Build and test
 
 ```powershell
-.\scripts\Test-IisBackend.ps1        # build agent, 131 Framework checks, ASPX compilation, script syntax
+.\scripts\Test-IisBackend.ps1        # build agent, 200 Framework checks, ASPX compilation, script syntax
 .\scripts\Build-LinuxAgent.ps1       # Linux agent files + slaps-agent_<version>_all.deb in artifacts\Agent-Linux (no Linux tools needed)
 .\scripts\Build-ServerPackage.ps1    # tests + Linux agent + signing + artifacts\StandaloneLaps-Server-<version>-<timestamp>.zip
 .\scripts\Start-Preview.ps1          # optional local IIS Express UI preview with synthetic data
@@ -270,7 +273,7 @@ The scripts use the Windows-supplied .NET Framework compiler and `aspnet_compile
 
 ## Limits
 
-The Windows LAPS lookup (1.6.0) is tested with synthetic data and a local DPAPI-NG round trip only, not yet against a real domain or tenant. File storage without SQL/HA; audit is not tamper-evident; no automatic purge of deleted-device archives. The SLAPS CA and recovery keys live on the IIS server (non-exportable, which only blocks casual copies): an attacker who controls that server can decrypt stored passwords and issue agent certificates. Passwords briefly exist in managed memory. Back up `App_Data\Vault` and the key backups independently; application startup trims histories to the configured limit (default 20).
+The Windows LAPS lookup (1.6.x: reading, expire/rotate, Entra setup with certificate renewal) is tested with synthetic data, a local DPAPI-NG round trip and a simulated Microsoft Graph, not yet against a real domain, Intune or Entra tenant. File storage without SQL/HA; audit is not tamper-evident; no automatic purge of deleted-device archives. The SLAPS CA and recovery keys live on the IIS server (non-exportable, which only blocks casual copies): an attacker who controls that server can decrypt stored passwords and issue agent certificates. Passwords briefly exist in managed memory. Back up `App_Data\Vault` and the key backups independently; application startup trims histories to the configured limit (default 20).
 
 See [Storage, encryption and migration](docs/Migration.md) for the data layout and moving to another server.
 
