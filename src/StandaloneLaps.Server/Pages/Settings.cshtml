@@ -70,7 +70,7 @@ else
 <dt>Reads</dt><dd>@string.Join(", ", new[] { laps.AdLegacy ? "legacy LAPS (ms-Mcs-AdmPwd)" : null, laps.AdModern ? "Windows LAPS" + (laps.AdDecrypt ? " incl. encrypted" : " (clear text only)") : null, laps.AdModern && laps.AdHistory ? "password history" : null }.Where(s => s != null))</dd>
 <dt>Decryption</dt><dd>@(laps.UsePython ? "Python dpapi-ng (" + laps.Python + ", auth " + laps.DecryptAuth + ", key server " + (laps.DecryptServer ?? laps.AdServer) + ")" : "Windows DPAPI-NG (process identity)")</dd>
 </dl>
-@if (identity.IsAdmin && laps.AdEnabled) {<form method="post"><button class="button secondary" type="submit" name="action" value="test-ad">Test Active Directory connection</button></form>}
+@if (identity.IsAdmin && laps.AdEnabled) {<form method="post" data-ajax><button class="button secondary" type="submit" name="action" value="test-ad" data-busy="Testing…">Test Active Directory connection</button><p class="ajax-result" hidden aria-live="polite"></p></form>}
 </div>
 <div class="certificate">
 <div class="certificate-head"><h3>Microsoft Entra ID</h3><span class="badge @(laps.EntraEnabled ? "success" : "neutral")"><span></span>@(laps.EntraEnabled ? "On" : "Off")</span></div>
@@ -81,7 +81,7 @@ else
 <dt>Permission</dt><dd>Microsoft Graph <code>DeviceLocalCredential.Read.All</code> (application, admin consent)</dd>
 <dt>History</dt><dd>@(laps.EntraHistory ? "Older passwords are shown" : "Only the current password")</dd>
 </dl>
-@if (identity.IsAdmin && laps.EntraEnabled) {<form method="post"><button class="button secondary" type="submit" name="action" value="test-entra">Test Entra connection</button></form>}
+@if (identity.IsAdmin && laps.EntraEnabled) {<form method="post" data-ajax><button class="button secondary" type="submit" name="action" value="test-entra" data-busy="Testing…">Test Entra connection</button><p class="ajax-result" hidden aria-live="polite"></p></form>}
 </div>
 </section>
 

@@ -215,6 +215,11 @@ internal static class TestRunner
             Check("settings show the Windows LAPS configuration", settingsLaps.Contains("Windows LAPS lookup") && settingsLaps.Contains("127.0.0.1") && settingsLaps.Contains("Test Active Directory connection") && settingsLaps.Contains("Microsoft Entra ID"));
             var adTest = await (await portalClient.PostAsync(baseUrl + "settings", Form(settingsLaps, ("action", "test-ad")))).Content.ReadAsStringAsync();
             Check("Active Directory connection test reports the failure on the page", adTest.Contains("notice danger") && adTest.Contains("Cannot connect to Active Directory"));
+            var ajaxRequest = new HttpRequestMessage(HttpMethod.Post, baseUrl + "settings") { Content = Form(settingsLaps, ("action", "test-ad")) };
+            ajaxRequest.Headers.Add("X-Slaps-Ajax", "1");
+            var ajaxResponse = await portalClient.SendAsync(ajaxRequest);
+            var ajaxJson = JsonDocument.Parse(await ajaxResponse.Content.ReadAsStringAsync()).RootElement;
+            Check("connection tests answer as JSON for in-place display (no page reload)", ajaxResponse.Content.Headers.ContentType?.MediaType == "application/json" && !ajaxJson.GetProperty("ok").GetBoolean() && ajaxJson.GetProperty("message").GetString().Contains("Cannot connect") && settingsLaps.Contains("data-ajax"));
             Check("Windows LAPS reveal without antiforgery token is rejected", (await portalClient.PostAsync(baseUrl + "windowslaps?source=ad&id=" + Guid.NewGuid() + "&tab=password", new FormUrlEncodedContent(new Dictionary<string, string> { ["action"] = "reveal" }))).StatusCode == HttpStatusCode.BadRequest);
 
             Console.WriteLine("Retention, delete, restore, rekey");

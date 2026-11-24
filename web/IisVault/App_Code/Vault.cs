@@ -448,6 +448,33 @@ namespace StandaloneLapsWeb
             var line = Json.Serialize(new { utc = DateTimeOffset.UtcNow.ToString("O"), actor = actor, action = action, deviceId = device, rotationId = rotation }) + Environment.NewLine;
             AppendAudit(line);
         }
+        // Unexpected errors: type, message, inner exception and stack trace go to App_Data\Vault\errors.log (rotated at 1 MB),
+        // the user only sees the reference. Never throws: logging must not hide the original error.
+        public static string LogError(Exception error, string context)
+        {
+            var reference = Guid.NewGuid().ToString("N").Substring(0, 10);
+            try
+            {
+                var text = new StringBuilder();
+                text.Append(DateTimeOffset.UtcNow.ToString("O")).Append(" ref=").Append(reference).Append(' ').Append(context).AppendLine();
+                for (var current = error; current != null; current = current.InnerException)
+                    text.Append("  ").Append(current.GetType().FullName).Append(": ").Append(current.Message).AppendLine();
+                text.AppendLine(error == null ? "" : error.StackTrace).AppendLine();
+                lock (Gate)
+                {
+                    var path = Path.Combine(DataRoot, "errors.log");
+                    if (File.Exists(path) && new FileInfo(path).Length > 1048576)
+                    {
+                        var old = Path.Combine(DataRoot, "errors.old.log");
+                        if (File.Exists(old)) File.Delete(old);
+                        File.Move(path, old);
+                    }
+                    File.AppendAllText(path, text.ToString(), Encoding.UTF8);
+                }
+            }
+            catch (Exception) { }
+            return reference;
+        }
         private static void AppendAudit(string line)
         {
             lock (Gate)

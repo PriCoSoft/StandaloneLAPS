@@ -67,18 +67,34 @@ namespace StandaloneLapsWeb
         // RSA 2048 / SHA-256 self-signed client-authentication certificate. Only its public part goes to Entra ID.
         public static byte[] NewCertificate(DateTime utcNow, out X509Certificate2 certificate)
         {
-            using (var rsa = new RSACng(2048))
+            // First choice: ephemeral CNG key (nothing touches the disk). Fallback for application pool identities where
+            // that fails: a temporary CSP key in the machine key store, deleted again right after the PFX export.
+            try
             {
-                var request = new CertificateRequest("CN=SLAPS Graph access " + Environment.MachineName.ToLowerInvariant(), rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-                request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
-                request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new Oid(ClientAuthOid) }, false));
-                request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
-                using (var created = request.CreateSelfSigned(new DateTimeOffset(utcNow.AddMinutes(-10)), new DateTimeOffset(utcNow.AddDays(ValidityDays))))
+                using (var rsa = new RSACng(2048)) return Build(rsa, utcNow, out certificate);
+            }
+            catch (CryptographicException)
+            {
+                var parameters = new CspParameters(24, null, "SLAPS-Graph-" + Guid.NewGuid().ToString("N")) { Flags = CspProviderFlags.UseMachineKeyStore };
+                using (var rsa = new RSACryptoServiceProvider(2048, parameters))
                 {
-                    var pfx = created.Export(X509ContentType.Pkcs12);
-                    certificate = Open(pfx);
-                    return pfx;
+                    try { return Build(rsa, utcNow, out certificate); }
+                    finally { rsa.PersistKeyInCsp = false; rsa.Clear(); }
                 }
+            }
+        }
+
+        private static byte[] Build(RSA rsa, DateTime utcNow, out X509Certificate2 certificate)
+        {
+            var request = new CertificateRequest("CN=SLAPS Graph access " + Environment.MachineName.ToLowerInvariant(), rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
+            request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new Oid(ClientAuthOid) }, false));
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+            using (var created = request.CreateSelfSigned(new DateTimeOffset(utcNow.AddMinutes(-10)), new DateTimeOffset(utcNow.AddDays(ValidityDays))))
+            {
+                var pfx = created.Export(X509ContentType.Pkcs12);
+                certificate = Open(pfx);
+                return pfx;
             }
         }
 

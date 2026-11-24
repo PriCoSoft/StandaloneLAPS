@@ -31,6 +31,13 @@ protected void Page_Load(object sender, EventArgs e)
             catch (WindowsLapsException ex) { LapsTestError = ex.Message; }
             catch (WindowsLapsNotFoundException) { LapsTestError = "Microsoft Graph returned 404 (not found)."; }
             Vault.AuditTarget(Identity.Actor, "windows-laps-" + action + (LapsTestError == null ? "-ok" : "-failed"), "");
+            if (Request.Headers["X-Slaps-Ajax"] == "1")
+            {
+                // copy.js: answer in place instead of reloading the page.
+                Response.Clear(); Response.ContentType = "application/json";
+                Response.Write(Vault.Json.Serialize(new { ok = LapsTestError == null, message = LapsTestError ?? LapsTest }));
+                Response.End();
+            }
         }
         else if (action != "history-limit") throw new HttpException(400, "Unsupported request.");
         else {
@@ -128,7 +135,7 @@ protected void Page_Load(object sender, EventArgs e)
 <dt>Runs as</dt><dd><%= E(WindowsLapsSettings.NetworkIdentity) %></dd>
 </dl>
 <p class="helper tight">This identity needs the LAPS read permission on the OUs (<code>Set-LapsADReadPasswordPermission</code>, <code>Set-AdmPwdReadPasswordPermission</code>) and, for encrypted passwords, membership in the group of the LAPS policy <em>Configure authorized password decryptors</em>.</p>
-<% if (Identity.IsAdmin && WindowsLapsSettings.AdEnabled) { %><form method="post"><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button secondary" type="submit" name="action" value="test-ad">Test Active Directory connection</button></form><% } %>
+<% if (Identity.IsAdmin && WindowsLapsSettings.AdEnabled) { %><form method="post" data-ajax><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button secondary" type="submit" name="action" value="test-ad" data-busy="Testing…">Test Active Directory connection</button><p class="ajax-result" hidden aria-live="polite"></p></form><% } %>
 </div>
 <div class="certificate">
 <div class="certificate-head"><h3>Microsoft Entra ID</h3><span class="badge <%= WindowsLapsSettings.EntraEnabled ? "success" : "neutral" %>"><span></span><%= WindowsLapsSettings.EntraEnabled ? "On" : "Off" %></span></div>
@@ -141,7 +148,7 @@ protected void Page_Load(object sender, EventArgs e)
 <dt>Permission</dt><dd>Microsoft Graph <code>DeviceLocalCredential.Read.All</code> (application)<%= entraState.consentResult == null ? "" : E(" · consent " + entraState.consentResult) %></dd>
 <dt>History</dt><dd><%= WindowsLapsSettings.EntraHistory ? "Older passwords are shown" : "Only the current password" %></dd>
 </dl>
-<% if (Identity.IsAdmin) { %><div class="form-actions"><a class="button" href="entrasetup.aspx">Open Entra setup</a><% if (WindowsLapsSettings.EntraEnabled) { %><form method="post"><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button secondary" type="submit" name="action" value="test-entra">Test Entra connection</button></form><% } %></div><% } %>
+<% if (Identity.IsAdmin) { %><div class="form-actions"><a class="button" href="entrasetup.aspx">Open Entra setup</a><% if (WindowsLapsSettings.EntraEnabled) { %><form method="post" data-ajax data-ajax-result="entra-test-result"><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button secondary" type="submit" name="action" value="test-entra" data-busy="Testing…">Test Entra connection</button></form><% } %></div><p class="ajax-result" id="entra-test-result" hidden aria-live="polite"></p><% } %>
 </div>
 </section>
 
@@ -163,4 +170,4 @@ protected void Page_Load(object sender, EventArgs e)
 </section>
 <p class="identity">Signed in as <%= E(Identity.DisplayName) %> · <%= E(Identity.Actor) %></p>
 </main>
-</div></body></html>
+</div><%= PortalLayout.Scripts %></body></html>

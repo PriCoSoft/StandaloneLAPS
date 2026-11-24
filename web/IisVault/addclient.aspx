@@ -84,4 +84,4 @@ protected void Page_Load(object sender, EventArgs e)
 </section>
 <% } %>
 </main>
-</div></body></html>
+</div><%= PortalLayout.Scripts %></body></html>

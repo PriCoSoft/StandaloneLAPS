@@ -21,6 +21,7 @@ protected void Page_Load(object sender, EventArgs e)
     Csrf = (string)Session["csrf"];
     TenantId = WindowsLapsSettings.EntraTenantId; ClientId = WindowsLapsSettings.EntraClientId;
     WebConfigCertificate = WindowsLapsSettings.EntraCertificateThumbprint.Length > 0;
+    State = EntraAppCredential.Load();
     if (Request.QueryString["download"] == "cer")
     {
         var raw = EntraAppCredential.PublicCertificate();
@@ -49,7 +50,9 @@ protected void Page_Load(object sender, EventArgs e)
                     Guid tenant, client;
                     if (!Guid.TryParse(TenantId, out tenant) || !Guid.TryParse(ClientId, out client)) { ErrorText = "Tenant and client ID are not configured."; break; }
                     Vault.AuditTarget(Identity.Actor, "entra-admin-consent-started", client.ToString("D"));
+                    // Redirect without rendering the page (the page would otherwise still render after CompleteRequest).
                     Response.Redirect(PortalAuth.AdminConsentUrl(tenant.ToString("D"), client.ToString("D")), false);
+                    Response.SuppressContent = true;
                     Context.ApplicationInstance.CompleteRequest();
                     return;
                 case "object-id":
@@ -73,6 +76,22 @@ protected void Page_Load(object sender, EventArgs e)
         }
         catch (WindowsLapsException ex) { ErrorText = ex.Message; }
         catch (WindowsLapsNotFoundException) { ErrorText = "Microsoft Graph returned 404 (not found)."; }
+        catch (HttpException) { throw; }
+        catch (System.Threading.ThreadAbortException) { throw; }
+        catch (Exception ex)
+        {
+            // Administrators only: show the technical reason (e.g. key storage or file permissions of the pool identity).
+            var reference = Vault.LogError(ex, Request.AppRelativeCurrentExecutionFilePath + " action=" + Request.Form["action"]);
+            ErrorText = "The action failed: " + ex.GetType().Name + ": " + ex.Message + (ex.InnerException == null ? "" : " (" + ex.InnerException.GetType().Name + ": " + ex.InnerException.Message + ")") +
+                " Identity: " + WindowsLapsSettings.ProcessIdentity + ". Reference " + reference + " in App_Data\\Vault\\errors.log.";
+        }
+    }
+    if (Request.HttpMethod == "POST" && Request.Headers["X-Slaps-Ajax"] == "1")
+    {
+        // copy.js: answer in place instead of reloading the page.
+        Response.Clear(); Response.ContentType = "application/json";
+        Response.Write(Vault.Json.Serialize(new { ok = ErrorText == null, message = ErrorText ?? Info }));
+        Response.End();
     }
     State = EntraAppCredential.Load();
 }
@@ -130,7 +149,7 @@ protected void Page_Load(object sender, EventArgs e)
 <section class="form-card settings-card setup-step">
 <div class="step-head"><span class="step-number">4</span><h2 class="card-title">Test</h2></div>
 <p class="helper">Requests a token and reads one entry of <span class="mono">deviceLocalCredentials</span> (no password). After uploading a certificate or granting consent, Entra may need a few minutes.</p>
-<form method="post"><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button" type="submit" name="action" value="test">Test connection</button></form>
+<form method="post" data-ajax><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button" type="submit" name="action" value="test" data-busy="Testing…">Test connection</button><p class="ajax-result" hidden aria-live="polite"></p></form>
 </section>
 <p class="identity">Signed in as <%= E(Identity.DisplayName) %> · <%= E(Identity.Actor) %></p>
 </main>

@@ -11,7 +11,7 @@ void Application_BeginRequest(object sender, EventArgs e)
     Response.Headers["X-Content-Type-Options"] = "nosniff";
     Response.Headers["X-Frame-Options"] = "DENY";
     Response.Headers["Referrer-Policy"] = "no-referrer";
-    Response.Headers["Content-Security-Policy"] = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+    Response.Headers["Content-Security-Policy"] = "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
     if (!Request.IsSecureConnection) { Deny("HTTPS is required."); return; }
     // Only the certificate-authenticated agent API is reachable from outside PortalAllowedNetworks (e.g. the DMZ).
     var isApi = string.Equals(Request.AppRelativeCurrentExecutionFilePath, "~/api.aspx", StringComparison.OrdinalIgnoreCase);
@@ -32,10 +32,13 @@ void Application_Error(object sender, EventArgs e)
     var http = error as HttpException;
     var code = http == null ? 500 : http.GetHttpCode();
     if (code != 400 && code != 403 && code != 404) code = 500;
+    // Details stay on the server (App_Data\Vault\errors.log); the page shows only a reference to look them up.
+    string reference = null;
+    if (code == 500) reference = StandaloneLapsWeb.Vault.LogError(error is HttpUnhandledException && error.InnerException != null ? error.InnerException : error, Request.HttpMethod + " " + Request.AppRelativeCurrentExecutionFilePath);
     Server.ClearError();
     Response.Clear(); Response.StatusCode = code; Response.TrySkipIisCustomErrors = true;
     Response.ContentType = "text/plain";
-    Response.Write(code == 403 ? "Access denied." : code == 404 ? "Not found." : "Request failed. Check configuration, data-directory permissions and certificate access.");
+    Response.Write(code == 403 ? "Access denied." : code == 404 ? "Not found." : "Request failed. Check configuration, data-directory permissions and certificate access. Reference " + reference + " (details in App_Data\\Vault\\errors.log on the server).");
     CompleteRequest();
 }
 </script>

@@ -42,6 +42,8 @@ public sealed class SettingsModel : PortalPage
             try { LapsTest = action == "test-ad" ? await Task.Run(laps.TestAd) : await laps.TestEntra(); }
             catch (WindowsLapsException ex) { LapsTestError = ex.Message; }
             Store.Audit(Identity.Actor, "windows-laps-" + action + (LapsTestError == null ? "-ok" : "-failed"), Guid.Empty, Guid.Empty);
+            // copy.js: answer in place instead of reloading the page.
+            if (Request.Headers["X-Slaps-Ajax"] == "1") return new JsonResult(new { ok = LapsTestError == null, message = LapsTestError ?? LapsTest });
             Load(null);
             return Page();
         }

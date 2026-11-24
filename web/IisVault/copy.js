@@ -95,6 +95,32 @@
         if (typeof saved.sort === 'number' && headers[saved.sort] && headers[saved.sort].hasAttribute('data-sort')) sortTable(table, saved.sort, saved.direction || 1);
     }
 
+    // ---- Asynchronous forms (form[data-ajax]): e.g. "Test connection" without reloading the page ----------
+    // The server answers {ok, message} when the request carries X-Slaps-Ajax: 1; the result appears in the element
+    // named by data-ajax-result (or the form's .ajax-result). Without JavaScript the form posts normally.
+    document.addEventListener('submit', function (event) {
+        var form = event.target;
+        if (!form || !form.hasAttribute || !form.hasAttribute('data-ajax') || !window.fetch) return;
+        event.preventDefault();
+        var button = event.submitter || form.querySelector('button[type="submit"]');
+        var result = form.getAttribute('data-ajax-result') ? document.getElementById(form.getAttribute('data-ajax-result')) : form.querySelector('.ajax-result');
+        var body = new URLSearchParams(new FormData(form));
+        if (button && button.name) body.append(button.name, button.value);
+        var label = button ? button.textContent : '';
+        if (button) { button.disabled = true; button.textContent = button.getAttribute('data-busy') || 'Working…'; }
+        if (result) { result.hidden = false; result.className = 'ajax-result notice'; result.textContent = 'Please wait…'; }
+        fetch(form.getAttribute('action') || window.location.href, { method: 'POST', body: body, credentials: 'same-origin', headers: { 'X-Slaps-Ajax': '1', 'Accept': 'application/json' } })
+            .then(function (response) {
+                return response.text().then(function (text) {
+                    try { return JSON.parse(text); } catch (e) { return { ok: false, message: 'Request failed (HTTP ' + response.status + '). ' + text.slice(0, 300) }; }
+                });
+            }, function () { return { ok: false, message: 'The server could not be reached.' }; })
+            .then(function (answer) {
+                if (result) { result.className = 'ajax-result notice ' + (answer.ok ? 'success' : 'danger'); result.textContent = answer.message || (answer.ok ? 'Done.' : 'Failed.'); }
+                if (button) { button.disabled = false; button.textContent = label; }
+            });
+    });
+
     function init() {
         Array.prototype.forEach.call(document.querySelectorAll('[data-secret]'), function (element) { element.classList.add('masked'); });
         Array.prototype.forEach.call(document.querySelectorAll('button[data-copy], button[data-toggle]'), function (button) { button.hidden = false; });
