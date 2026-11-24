@@ -126,7 +126,7 @@ protected void Page_Load(object sender, EventArgs e)
 <div class="step-head"><span class="step-number <%= State.consentResult == "granted" ? "done" : "" %>">2</span><h2 class="card-title">App registration: upload certificate and grant permission</h2></div>
 <ol class="steps">
 <li>Open <a href="<%= E(Portal("Credentials")) %>" target="_blank" rel="noopener">Certificates &amp; secrets</a> of the app registration → <em>Certificates</em> → <em>Upload certificate</em> → select the downloaded <code>.cer</code> file.</li>
-<li>Open <a href="<%= E(Portal("CallAnAPI")) %>" target="_blank" rel="noopener">API permissions</a> → <em>Add a permission</em> → <em>Microsoft Graph</em> → <em>Application permissions</em> → <code>DeviceLocalCredential.Read.All</code> → <em>Add permissions</em>.</li>
+<li>Open <a href="<%= E(Portal("CallAnAPI")) %>" target="_blank" rel="noopener">API permissions</a> → <em>Add a permission</em> → <em>Microsoft Graph</em> → <em>Application permissions</em> → <code>DeviceLocalCredential.Read.All</code> → <em>Add permissions</em>. Only if "Rotate via Intune" should be used (<code>WindowsLapsEntraAllowRotate</code>): also <code>DeviceManagementManagedDevices.Read.All</code> and <code>DeviceManagementManagedDevices.PrivilegedOperations.All</code>.</li>
 <li>Grant admin consent (button below, or <em>Grant admin consent</em> on the API permissions page). This needs a Global Administrator or Privileged Role Administrator.</li>
 </ol>
 <form method="post"><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button" type="submit" name="action" value="consent">Grant admin consent</button></form>

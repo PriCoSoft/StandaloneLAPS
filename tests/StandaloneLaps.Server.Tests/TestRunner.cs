@@ -67,7 +67,7 @@ internal static class TestRunner
         ["Slaps:MasterKey"] = masterKey, ["Slaps:AuthMode"] = "Development", ["Slaps:TlsDnsNames"] = "localhost;127.0.0.1",
         ["Logging:LogLevel:Default"] = "Warning",
         // Windows LAPS lookup against a closed local port: the page and error handling are exercised without touching a real directory.
-        ["Slaps:WindowsLapsAdEnabled"] = "true", ["Slaps:WindowsLapsAdServer"] = "127.0.0.1", ["Slaps:WindowsLapsAdPort"] = "1", ["Slaps:WindowsLapsAdUseSsl"] = "false"
+        ["Slaps:WindowsLapsAdEnabled"] = "true", ["Slaps:WindowsLapsAdServer"] = "127.0.0.1", ["Slaps:WindowsLapsAdPort"] = "1", ["Slaps:WindowsLapsAdUseSsl"] = "false", ["Slaps:WindowsLapsAdAllowExpire"] = "true"
     };
 
     private static void CreateAgentFiles(string directory)
@@ -220,6 +220,14 @@ internal static class TestRunner
             var ajaxResponse = await portalClient.SendAsync(ajaxRequest);
             var ajaxJson = JsonDocument.Parse(await ajaxResponse.Content.ReadAsStringAsync()).RootElement;
             Check("connection tests answer as JSON for in-place display (no page reload)", ajaxResponse.Content.Headers.ContentType?.MediaType == "application/json" && !ajaxJson.GetProperty("ok").GetBoolean() && ajaxJson.GetProperty("message").GetString().Contains("Cannot connect") && settingsLaps.Contains("data-ajax"));
+            var expireUrl = baseUrl + "windowslaps?source=ad&id=" + Guid.NewGuid() + "&tab=password";
+            var expireRequest = new HttpRequestMessage(HttpMethod.Post, expireUrl) { Content = Form(settingsLaps, ("action", "expire")) };
+            expireRequest.Headers.Add("X-Slaps-Ajax", "1");
+            var expireJson = JsonDocument.Parse(await (await portalClient.SendAsync(expireRequest)).Content.ReadAsStringAsync()).RootElement;
+            Check("expire now (AD) answers in place and reports an unreachable directory", !expireJson.GetProperty("ok").GetBoolean() && expireJson.GetProperty("message").GetString().Contains("Cannot connect"));
+            var readerExpire = new HttpRequestMessage(HttpMethod.Post, expireUrl) { Content = Form(settingsLaps, ("action", "expire")) };
+            readerExpire.Headers.Add("X-Slaps-Development-Role", "reader");
+            Check("readers cannot expire passwords", (await portalClient.SendAsync(readerExpire)).StatusCode == HttpStatusCode.Forbidden);
             Check("Windows LAPS reveal without antiforgery token is rejected", (await portalClient.PostAsync(baseUrl + "windowslaps?source=ad&id=" + Guid.NewGuid() + "&tab=password", new FormUrlEncodedContent(new Dictionary<string, string> { ["action"] = "reveal" }))).StatusCode == HttpStatusCode.BadRequest);
 
             Console.WriteLine("Retention, delete, restore, rekey");

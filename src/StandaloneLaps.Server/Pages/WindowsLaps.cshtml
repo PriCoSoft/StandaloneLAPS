@@ -75,5 +75,10 @@ else
 <div class="@(Model.Tab == "history" ? "history-credentials" : "")">@foreach (var credential in shown) {@Model.Card(credential, index++)}</div>
 <p class="helper">Close this page after use. Every reveal is audited.</p>
 }
-</div><footer class="drawer-footer">Read-only directory lookup · Access is audited</footer></aside>
+@if (Model.Tab == "password" && laps.CanRotate(identity, selected.Source))
+{
+<section class="current-card rotate-card"><h3>Change the password soon</h3>
+<p>@(selected.Source == "ad" ? "Used the password? Set its expiry to now: the computer creates a new password at its next LAPS cycle. Until then the current password keeps working." : "Used the password? Ask Intune to rotate it: the device sets a new password at its next check-in and backs it up to Entra ID.")</p>
+<form method="post" action="@Model.Url(selected, "password")" asp-antiforgery="true" data-ajax><button class="button secondary" type="submit" name="action" value="expire" data-busy="Requesting…">@(selected.Source == "ad" ? "Expire password now" : "Rotate password now (Intune)")</button>@if (Model.RotateMessage == null) {<p class="ajax-result" hidden aria-live="polite"></p>} else {<p class="ajax-result notice success" aria-live="polite">@Model.RotateMessage</p>}</form></section>
+}</div><footer class="drawer-footer">Directory lookup · Access is audited</footer></aside>
 }

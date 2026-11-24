@@ -200,6 +200,8 @@ Alternatives: a certificate in LocalMachine\My (`WindowsLapsEntraCertificateThum
 | `WindowsLapsEntraTenantId`, `WindowsLapsEntraClientId` | sign-in values | App registration for Graph |
 | `WindowsLapsEntraCertificateThumbprint` / `WindowsLapsEntraClientSecret` | empty | Client credential (certificate recommended) |
 | `WindowsLapsEntraHistory` | `true` | Show older Entra passwords too |
+| `WindowsLapsAdAllowExpire` | `false` | Button *Expire password now* (administrators): sets `msLAPS-PasswordExpirationTime` / `ms-Mcs-AdmPwdExpirationTime` to now, like `Set-LapsADPasswordExpirationTime`; the computer rotates at its next LAPS cycle. Needs `Set-LapsADResetPasswordPermission` / `Set-AdmPwdResetPasswordPermission` for the pool identity. |
+| `WindowsLapsEntraAllowRotate` | `false` | Button *Rotate password now (Intune)* (administrators): Intune remote action *Rotate local admin password* (Graph beta). Intune-managed devices only; needs the application permissions `DeviceManagementManagedDevices.Read.All` and `DeviceManagementManagedDevices.PrivilegedOperations.All`. |
 
 The container server offers the same lookup; on Linux it uses LDAPS with a service account and the Python library dpapi-ng for decryption (see [docs/Container.md](docs/Container.md#windows-laps-lookup)).
 

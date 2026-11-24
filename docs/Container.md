@@ -204,6 +204,8 @@ Like the IIS portal (see README, "Windows LAPS lookup"), the container can **rea
 | `WindowsLapsEntraCertificatePath`, `WindowsLapsEntraCertificatePassword[File]` | — | PFX for the client assertion (recommended) |
 | `WindowsLapsEntraClientSecret[File]` | — | Alternative to the certificate |
 | `WindowsLapsEntraHistory` | `true` | Show older Entra passwords |
+| `WindowsLapsAdAllowExpire` | `false` | *Expire password now* (administrators; service account needs `Set-LapsADResetPasswordPermission` / `Set-AdmPwdResetPasswordPermission`) |
+| `WindowsLapsEntraAllowRotate` | `false` | *Rotate password now (Intune)* (administrators; Intune-managed devices; `DeviceManagementManagedDevices.Read.All` + `DeviceManagementManagedDevices.PrivilegedOperations.All`) |
 
 ## Limits
 

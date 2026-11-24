@@ -14,6 +14,7 @@ protected List<WindowsLapsComputer> Results = new List<WindowsLapsComputer>();
 protected List<string> Errors = new List<string>();
 protected WindowsLapsComputer Selected;
 protected WindowsLapsResult Revealed;
+protected string RotateMessage;
 protected string E(object value) { return Server.HtmlEncode(Convert.ToString(value)); }
 protected string Url(WindowsLapsComputer computer, string tab)
 {
@@ -81,9 +82,27 @@ protected void Page_Load(object sender, EventArgs e)
         }
     }
 
+    if (Source != null && Id != Guid.Empty && Request.HttpMethod == "POST" && Request.Form["action"] == "expire")
+    {
+        // "Expire now" (AD) / "Rotate now" (Intune): administrators only, switched on separately, audited.
+        if (Request.Form["csrf"] != Csrf) throw new HttpException(403, "Invalid request token.");
+        if (!WindowsLapsSettings.CanRotate(Identity, Source)) throw new HttpException(403, "Not allowed.");
+        string message = null, failure = null;
+        try { message = Source == "ad" ? ActiveDirectoryLaps.Expire(Id) : EntraLaps.Rotate(Id); }
+        catch (WindowsLapsException ex) { failure = ex.Message; }
+        catch (WindowsLapsNotFoundException) { failure = "Microsoft Graph returned 404 (not found)."; }
+        Vault.AuditTarget(Identity.Actor, (Source == "ad" ? "windows-laps-expire-ad" : "windows-laps-rotate-entra") + (failure == null ? "" : "-failed"), Id.ToString("D"));
+        if (Request.Headers["X-Slaps-Ajax"] == "1")
+        {
+            Response.Clear(); Response.ContentType = "application/json";
+            Response.Write(Vault.Json.Serialize(new { ok = failure == null, message = failure ?? message }));
+            Response.End();
+        }
+        if (failure != null) Errors.Add(failure); else RotateMessage = message;
+    }
     if (Source != null && Id != Guid.Empty)
     {
-        var reveal = Request.HttpMethod == "POST";
+        var reveal = Request.HttpMethod == "POST" && Request.Form["action"] != "expire";
         if (reveal && (Request.Form["csrf"] != Csrf || Request.Form["action"] != "reveal")) throw new HttpException(403, "Invalid request token.");
         try
         {
@@ -154,12 +173,22 @@ protected void Page_Load(object sender, EventArgs e)
 <% if (Revealed == null) { %>
 <section class="current-card"><h3><%= Tab == "history" ? "Previous passwords" : "Current password" %></h3><p><%= Tab == "history" ? "Older passwords kept by Windows LAPS (password history). They are read and decrypted only when you ask for them." : "The password is read live from " + E(SourceName(Selected.Source)) + " and decrypted on this server when needed." %></p>
 <form method="post" action="<%= E(Url(Selected, Tab)) %>"><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button large" type="submit" name="action" value="reveal"><%= Tab == "history" ? "Show password history" : "Show password" %></button></form></section>
+<% if (Tab == "password") { %><% if (WindowsLapsSettings.CanRotate(Identity, Selected.Source)) { %>
+<section class="current-card rotate-card"><h3>Change the password soon</h3>
+<p><%= Selected.Source == "ad" ? "Used the password? Set its expiry to now: the computer creates a new password at its next LAPS cycle. Until then the current password keeps working." : "Used the password? Ask Intune to rotate it: the device sets a new password at its next check-in and backs it up to Entra ID." %></p>
+<form method="post" action="<%= E(Url(Selected, "password")) %>" data-ajax><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button secondary" type="submit" name="action" value="expire" data-busy="Requesting…"><%= Selected.Source == "ad" ? "Expire password now" : "Rotate password now (Intune)" %></button><p class="ajax-result <%= RotateMessage == null ? "" : "notice success" %>" <%= RotateMessage == null ? "hidden" : "" %> aria-live="polite"><%= E(RotateMessage) %></p></form></section>
+<% } %><% } %>
 <% } else { var index = 0; var shown = Shown().ToList(); %>
 <% foreach (var error in Revealed.Errors) { %><p class="notice danger"><%= E(error) %></p><% } %>
 <% if (Mixed && Tab == "password") { %><p class="notice">This computer has both a <strong>Windows LAPS</strong> and a <strong>legacy LAPS</strong> password (mixed operation, e.g. during migration). The one that changed last is active on the device; compare the dates below.</p><% } %>
 <% if (shown.Count == 0) { %><div class="empty-panel"><h3><%= Tab == "history" ? "No password history" : "No password found" %></h3><p><%= Tab == "history" ? "Windows LAPS keeps history only for encrypted passwords and when PasswordHistorySize is set." : "No LAPS password is stored for this computer, or this server's identity cannot read it." %></p></div><% } %>
 <div class="<%= Tab == "history" ? "history-credentials" : "" %>"><% foreach (var credential in shown) { %><%= Card(credential, index++) %><% } %></div>
 <p class="helper">Close this page after use. Every reveal is audited.</p>
+<% if (Tab == "password") { %><% if (WindowsLapsSettings.CanRotate(Identity, Selected.Source)) { %>
+<section class="current-card rotate-card"><h3>Change the password soon</h3>
+<p><%= Selected.Source == "ad" ? "Used the password? Set its expiry to now: the computer creates a new password at its next LAPS cycle. Until then the current password keeps working." : "Used the password? Ask Intune to rotate it: the device sets a new password at its next check-in and backs it up to Entra ID." %></p>
+<form method="post" action="<%= E(Url(Selected, "password")) %>" data-ajax><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button secondary" type="submit" name="action" value="expire" data-busy="Requesting…"><%= Selected.Source == "ad" ? "Expire password now" : "Rotate password now (Intune)" %></button><p class="ajax-result <%= RotateMessage == null ? "" : "notice success" %>" <%= RotateMessage == null ? "hidden" : "" %> aria-live="polite"><%= E(RotateMessage) %></p></form></section>
+<% } %><% } %>
 <% } %>
 <% } %>
 </div><footer class="drawer-footer">Read-only directory lookup · Access is audited</footer></aside>

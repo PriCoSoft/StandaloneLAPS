@@ -46,6 +46,14 @@ namespace StandaloneLapsWeb
         public static string EntraCertificateThumbprint { get { return Vault.Setting("WindowsLapsEntraCertificateThumbprint").Replace(" ", "").Trim(); } }
         public static bool EntraHistory { get { return Flag("WindowsLapsEntraHistory", true); } }
 
+        // Optional write actions (administrators only): set the AD expiry to now / ask Intune to rotate.
+        public static bool AdAllowExpire { get { return Flag("WindowsLapsAdAllowExpire", false); } }
+        public static bool EntraAllowRotate { get { return Flag("WindowsLapsEntraAllowRotate", false); } }
+        public static bool CanRotate(PortalIdentity identity, string source)
+        {
+            return identity != null && identity.IsAdmin && (source == "ad" ? AdEnabled && AdAllowExpire : source == "entra" && EntraEnabled && EntraAllowRotate);
+        }
+
         // "Admin" (default) or "Reader": which SLAPS role may look up and reveal directory passwords.
         public static bool ReaderAllowed { get { return string.Equals(Vault.Setting("WindowsLapsRequiredRole").Trim(), "Reader", StringComparison.OrdinalIgnoreCase); } }
         public static bool Enabled { get { return AdEnabled || EntraEnabled; } }
@@ -168,6 +176,43 @@ namespace StandaloneLapsWeb
             }
         }
 
+        // "Expire now" like Set-LapsADPasswordExpirationTime / Reset-AdmPwdPassword: the device rotates at its next cycle.
+        // Needs Set-LapsADResetPasswordPermission (Windows LAPS) / Set-AdmPwdResetPasswordPermission (legacy) for this identity.
+        public static string Expire(Guid id)
+        {
+            using (var connection = Connect())
+            {
+                SearchResponse response;
+                try { response = (SearchResponse)connection.SendRequest(new SearchRequest("<GUID=" + id.ToString("D") + ">", "(objectCategory=computer)", SearchScope.Base, "name", WindowsLapsFormat.Expiration, WindowsLapsFormat.LegacyExpiration)); }
+                catch (DirectoryOperationException ex) { throw new WindowsLapsException("Active Directory lookup failed: " + ex.Message); }
+                if (response.Entries.Count == 0) throw new WindowsLapsException("The computer was not found.");
+                var dn = response.Entries[0].DistinguishedName;
+                var searchBase = WindowsLapsSettings.AdSearchBase;
+                if (searchBase.Length > 0 && !dn.EndsWith(searchBase, StringComparison.OrdinalIgnoreCase)) throw new WindowsLapsException("The computer is outside WindowsLapsAdSearchBase.");
+                var values = Values(response.Entries[0]);
+                var options = WindowsLapsSettings.AdOptions;
+                var modern = options.Modern && values.ContainsKey(WindowsLapsFormat.Expiration);
+                var legacy = options.Legacy && values.ContainsKey(WindowsLapsFormat.LegacyExpiration);
+                if (!modern && !legacy) throw new WindowsLapsException("No LAPS expiry is stored for this computer, so there is no LAPS password to rotate.");
+                var now = DateTime.UtcNow.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture);
+                var changes = new List<DirectoryAttributeModification>();
+                foreach (var name in (modern ? new[] { WindowsLapsFormat.Expiration } : new string[0]).Concat(legacy ? new[] { WindowsLapsFormat.LegacyExpiration } : new string[0]))
+                {
+                    var change = new DirectoryAttributeModification { Name = name, Operation = DirectoryAttributeOperation.Replace };
+                    change.Add(now);
+                    changes.Add(change);
+                }
+                try { connection.SendRequest(new ModifyRequest(dn, changes.ToArray())); }
+                catch (DirectoryOperationException ex)
+                {
+                    if (ex.Response != null && ex.Response.ResultCode == ResultCode.InsufficientAccessRights)
+                        throw new WindowsLapsException("Access denied: " + WindowsLapsSettings.NetworkIdentity + " may not change the LAPS expiry. Grant it with Set-LapsADResetPasswordPermission" + (legacy ? " and Set-AdmPwdResetPasswordPermission" : "") + " on the OU.");
+                    throw new WindowsLapsException("Active Directory refused the change: " + ex.Message);
+                }
+                return WindowsLapsFormat.ExpireMessage(modern, legacy);
+            }
+        }
+
         public static WindowsLapsComputer Find(Guid id, out WindowsLapsResult credentials, bool reveal)
         {
             credentials = null;
@@ -230,6 +275,7 @@ namespace StandaloneLapsWeb
     public static class EntraLaps
     {
         private const string Graph = "https://graph.microsoft.com/v1.0/";
+        private const string GraphBeta = "https://graph.microsoft.com/beta/";
         private static readonly object Gate = new object();
         private static string token;
         private static DateTime tokenExpiresUtc;
@@ -254,6 +300,17 @@ namespace StandaloneLapsWeb
         {
             try { return ParseDevices(Get("directory/deviceLocalCredentials/" + id.ToString("D"))).FirstOrDefault(); }
             catch (WindowsLapsNotFoundException) { return null; }
+        }
+
+        // Intune remote action "Rotate local admin password" (Graph beta). Needs DeviceManagementManagedDevices.Read.All and
+        // DeviceManagementManagedDevices.PrivilegedOperations.All (application) and an Intune-managed device.
+        public static string Rotate(Guid deviceId)
+        {
+            var json = Get("deviceManagement/managedDevices?$filter=" + Uri.EscapeDataString("azureADDeviceId eq " + WindowsLapsFormat.ODataLiteral(deviceId.ToString("D"))) + "&$select=id,deviceName");
+            var managed = Items(json).Select(item => Text(item, "id")).FirstOrDefault(id => !string.IsNullOrEmpty(id));
+            if (managed == null) throw new WindowsLapsException("This device is not managed by Microsoft Intune; a rotation can only be requested for Intune-managed devices.");
+            Send(GraphBeta + "deviceManagement/managedDevices/" + Uri.EscapeDataString(managed) + "/rotateLocalAdminPassword", "POST", "", AccessToken(), "application/json");
+            return "Intune was asked to rotate the local administrator password. The device changes it at its next check-in, then backs up the new password to Entra ID.";
         }
 
         public static WindowsLapsResult Read(Guid id, out WindowsLapsComputer computer)
@@ -594,7 +651,7 @@ namespace StandaloneLapsWeb
                 string detail;
                 using (var reader = new StreamReader(http.GetResponseStream(), Encoding.UTF8)) detail = ErrorText(reader.ReadToEnd());
                 if (http.StatusCode == HttpStatusCode.NotFound && method == "GET") throw new WindowsLapsNotFoundException();
-                if (http.StatusCode == HttpStatusCode.Forbidden) throw new WindowsLapsException("Microsoft Graph denied access (403). Grant the application permission DeviceLocalCredential.Read.All with admin consent. " + detail);
+                if (http.StatusCode == HttpStatusCode.Forbidden) throw new WindowsLapsException("Microsoft Graph denied access (403). Grant the application permission " + (url.Contains("/deviceManagement/") ? "DeviceManagementManagedDevices.Read.All and DeviceManagementManagedDevices.PrivilegedOperations.All (Intune license required)" : "DeviceLocalCredential.Read.All") + " with admin consent. " + detail);
                 throw new WindowsLapsException("Microsoft Entra ID / Graph returned " + (int)http.StatusCode + ". " + detail);
             }
         }

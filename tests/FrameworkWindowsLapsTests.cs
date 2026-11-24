@@ -130,6 +130,8 @@ public static class FrameworkWindowsLapsTests
 
     private static void Labels()
     {
+        Check(WindowsLapsFormat.ExpireMessage(true, true).Contains("Windows LAPS") && WindowsLapsFormat.ExpireMessage(true, true).Contains("legacy LAPS") && !WindowsLapsFormat.ExpireMessage(true, false).Contains("legacy") && WindowsLapsFormat.ExpireMessage(false, true).Contains("gpupdate"), "expire-now message names the affected LAPS flavours and when the device rotates");
+        Check(!WindowsLapsSettings.CanRotate(new PortalIdentity { Role = "admin" }, "ad") && !WindowsLapsSettings.CanRotate(new PortalIdentity { Role = "admin" }, "entra"), "expire/rotate stays off unless switched on in web.config");
         Check(WindowsLapsFormat.Title(new WindowsLapsCredential { Source = "ad", Kind = "current" }) == "Windows LAPS · current password" &&
               WindowsLapsFormat.Title(new WindowsLapsCredential { Source = "ad-legacy", Kind = "current" }) == "Legacy LAPS · current password" &&
               WindowsLapsFormat.Title(new WindowsLapsCredential { Source = "entra", Kind = "history" }) == "Entra ID · previous password", "card titles name the LAPS flavour (mixed operation shows both clearly)");

@@ -133,6 +133,7 @@ protected void Page_Load(object sender, EventArgs e)
 <dt>Connection</dt><dd><%= WindowsLapsSettings.AdUseSsl ? "LDAPS (636)" : "LDAP 389, Kerberos signed and encrypted" %></dd>
 <dt>Reads</dt><dd><%= E(string.Join(", ", new[] { WindowsLapsSettings.AdOptions.Legacy ? "legacy LAPS (ms-Mcs-AdmPwd)" : null, WindowsLapsSettings.AdOptions.Modern ? "Windows LAPS" + (WindowsLapsSettings.AdOptions.Decrypt ? " incl. encrypted (DPAPI-NG)" : " (clear text only)") : null, WindowsLapsSettings.AdOptions.Modern && WindowsLapsSettings.AdOptions.History ? "password history" : null }.Where(s => s != null))) %></dd>
 <dt>Runs as</dt><dd><%= E(WindowsLapsSettings.NetworkIdentity) %></dd>
+<dt>Expire now</dt><dd><%= WindowsLapsSettings.AdAllowExpire ? "On (administrators; needs <code>Set-LapsADResetPasswordPermission</code> / <code>Set-AdmPwdResetPasswordPermission</code>)" : "Off (<code>WindowsLapsAdAllowExpire</code>)" %></dd>
 </dl>
 <p class="helper tight">This identity needs the LAPS read permission on the OUs (<code>Set-LapsADReadPasswordPermission</code>, <code>Set-AdmPwdReadPasswordPermission</code>) and, for encrypted passwords, membership in the group of the LAPS policy <em>Configure authorized password decryptors</em>.</p>
 <% if (Identity.IsAdmin && WindowsLapsSettings.AdEnabled) { %><form method="post" data-ajax><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button secondary" type="submit" name="action" value="test-ad" data-busy="Testing…">Test Active Directory connection</button><p class="ajax-result" hidden aria-live="polite"></p></form><% } %>
@@ -147,6 +148,7 @@ protected void Page_Load(object sender, EventArgs e)
 <% if (entraState.lastRenewalError != null) { %><dt>Renewal problem</dt><dd class="error-text"><%= E(entraState.lastRenewalError) %></dd><% } %>
 <dt>Permission</dt><dd>Microsoft Graph <code>DeviceLocalCredential.Read.All</code> (application)<%= entraState.consentResult == null ? "" : E(" · consent " + entraState.consentResult) %></dd>
 <dt>History</dt><dd><%= WindowsLapsSettings.EntraHistory ? "Older passwords are shown" : "Only the current password" %></dd>
+<dt>Rotate via Intune</dt><dd><%= WindowsLapsSettings.EntraAllowRotate ? "On (administrators; needs <code>DeviceManagementManagedDevices.Read.All</code> and <code>DeviceManagementManagedDevices.PrivilegedOperations.All</code>)" : "Off (<code>WindowsLapsEntraAllowRotate</code>)" %></dd>
 </dl>
 <% if (Identity.IsAdmin) { %><div class="form-actions"><a class="button" href="entrasetup.aspx">Open Entra setup</a><% if (WindowsLapsSettings.EntraEnabled) { %><form method="post" data-ajax data-ajax-result="entra-test-result"><input type="hidden" name="csrf" value="<%= E(Csrf) %>" /><button class="button secondary" type="submit" name="action" value="test-entra" data-busy="Testing…">Test Entra connection</button></form><% } %></div><p class="ajax-result" id="entra-test-result" hidden aria-live="polite"></p><% } %>
 </div>

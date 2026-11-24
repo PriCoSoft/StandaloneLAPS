@@ -67,6 +67,10 @@ internal static class WindowsLapsTests
                     "{\"accountName\":\"LocalAdmin\",\"backupDateTime\":\"2026-10-01T10:00:00Z\",\"passwordBase64\":\"" + Convert.ToBase64String(Encoding.UTF8.GetBytes("Entra-Old")) + "\"}]}");
             if (url.Contains("deviceName eq 'DENIED'")) return Json(HttpStatusCode.Forbidden, "{\"error\":{\"code\":\"Authorization_RequestDenied\",\"message\":\"Insufficient privileges to complete the operation.\"}}");
             if (url.Contains("/deviceLocalCredentials/")) return Json(HttpStatusCode.NotFound, "{\"error\":{\"message\":\"not found\"}}");
+            if (url.Contains("/v1.0/deviceManagement/managedDevices?") && url.Contains("azureADDeviceId eq 'b465e4e8-e4e8-b465-e8e4-65b4e8e465b4'"))
+                return Json(HttpStatusCode.OK, "{\"value\":[{\"id\":\"md-0001\",\"deviceName\":\"SRV-ENTRA\"}]}");
+            if (url.Contains("/v1.0/deviceManagement/managedDevices?")) return Json(HttpStatusCode.OK, "{\"value\":[]}");
+            if (request.Method == HttpMethod.Post && url.EndsWith("/beta/deviceManagement/managedDevices/md-0001/rotateLocalAdminPassword")) { Requests.Add("ROTATED"); return new HttpResponseMessage(HttpStatusCode.NoContent); }
             return Json(HttpStatusCode.OK, "{\"value\":[]}");
         }
 
@@ -100,6 +104,11 @@ internal static class WindowsLapsTests
             check("Entra reveal returns current and previous password", computer.Name == "SRV-ENTRA" && credentials.Credentials.Count == 2 && credentials.Credentials[0].Kind == "current" && credentials.Credentials[0].Password == "Entra-Current" && credentials.Credentials[1].Password == "Entra-Old", null);
             check("access token is cached between Graph calls", fake.TokenRequests == 1, fake.TokenRequests.ToString());
             check("unknown Entra device ID gives no result instead of an error", (await service.SearchEntra(Guid.NewGuid().ToString())).Count == 0, null);
+            var rotated = await service.RotateEntra(Guid.Parse("b465e4e8-e4e8-b465-e8e4-65b4e8e465b4"));
+            check("Intune rotation: managed device looked up by Entra device ID, rotateLocalAdminPassword called", rotated.Contains("Intune was asked") && fake.Requests.Contains("ROTATED"), string.Join(" | ", fake.Requests));
+            var notManaged = false;
+            try { await service.RotateEntra(Guid.NewGuid()); } catch (WindowsLapsException ex) { notManaged = ex.Message.Contains("not managed by Microsoft Intune"); }
+            check("rotation for a device without Intune is refused with a clear message", notManaged, null);
             var denied = false;
             try { await service.SearchEntra("DENIED"); } catch (WindowsLapsException ex) { denied = ex.Message.Contains("DeviceLocalCredential.Read.All") && ex.Message.Contains("Insufficient privileges"); }
             check("missing Graph permission is explained", denied, null);

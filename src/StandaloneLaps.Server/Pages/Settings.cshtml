@@ -68,6 +68,7 @@ else
 <dt>Connection</dt><dd>@(laps.AdUseSsl ? "LDAPS" : "LDAP") port @laps.EffectivePort@(string.IsNullOrEmpty(laps.AdCaDirectory) ? "" : ", CA directory " + laps.AdCaDirectory)</dd>
 <dt>Service account</dt><dd>@(laps.AdUsername ?? "Process identity")</dd>
 <dt>Reads</dt><dd>@string.Join(", ", new[] { laps.AdLegacy ? "legacy LAPS (ms-Mcs-AdmPwd)" : null, laps.AdModern ? "Windows LAPS" + (laps.AdDecrypt ? " incl. encrypted" : " (clear text only)") : null, laps.AdModern && laps.AdHistory ? "password history" : null }.Where(s => s != null))</dd>
+<dt>Expire now</dt><dd>@(laps.AdAllowExpire ? "On (administrators; needs Set-LapsADResetPasswordPermission / Set-AdmPwdResetPasswordPermission)" : "Off (Slaps__WindowsLapsAdAllowExpire)")</dd>
 <dt>Decryption</dt><dd>@(laps.UsePython ? "Python dpapi-ng (" + laps.Python + ", auth " + laps.DecryptAuth + ", key server " + (laps.DecryptServer ?? laps.AdServer) + ")" : "Windows DPAPI-NG (process identity)")</dd>
 </dl>
 @if (identity.IsAdmin && laps.AdEnabled) {<form method="post" data-ajax><button class="button secondary" type="submit" name="action" value="test-ad" data-busy="Testing…">Test Active Directory connection</button><p class="ajax-result" hidden aria-live="polite"></p></form>}
@@ -80,6 +81,7 @@ else
 <dt>Credential</dt><dd>@(!string.IsNullOrEmpty(laps.EntraCertificatePath) ? "Certificate " + laps.EntraCertificatePath : !string.IsNullOrEmpty(laps.EntraClientSecret) ? "Client secret" : "Not configured")</dd>
 <dt>Permission</dt><dd>Microsoft Graph <code>DeviceLocalCredential.Read.All</code> (application, admin consent)</dd>
 <dt>History</dt><dd>@(laps.EntraHistory ? "Older passwords are shown" : "Only the current password")</dd>
+<dt>Rotate via Intune</dt><dd>@(laps.EntraAllowRotate ? "On (administrators; needs DeviceManagementManagedDevices.Read.All and DeviceManagementManagedDevices.PrivilegedOperations.All)" : "Off (Slaps__WindowsLapsEntraAllowRotate)")</dd>
 </dl>
 @if (identity.IsAdmin && laps.EntraEnabled) {<form method="post" data-ajax><button class="button secondary" type="submit" name="action" value="test-entra" data-busy="Testing…">Test Entra connection</button><p class="ajax-result" hidden aria-live="polite"></p></form>}
 </div>

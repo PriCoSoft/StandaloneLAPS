@@ -106,6 +106,8 @@ public sealed class ServerOptions
                 AdModern = Flag("WindowsLapsAdModern", true),
                 AdDecrypt = Flag("WindowsLapsAdDecrypt", true),
                 AdHistory = Flag("WindowsLapsAdHistory", true),
+                AdAllowExpire = Flag("WindowsLapsAdAllowExpire", false),
+                EntraAllowRotate = Flag("WindowsLapsEntraAllowRotate", false),
                 DecryptMode = Value("WindowsLapsAdDecryptMode") ?? "auto",
                 DecryptServer = Value("WindowsLapsAdDecryptServer"),
                 DecryptAuth = Value("WindowsLapsAdDecryptAuth") ?? "negotiate",

@@ -23,6 +23,7 @@ public sealed class WindowsLapsModel : PortalPage
     public List<string> Errors = new();
     public WindowsLapsComputer Selected;
     public WindowsLapsResult Revealed;
+    public string RotateMessage;
 
     public static string SourceName(string source) => source == "entra" ? "Microsoft Entra ID" : "Active Directory";
 
@@ -110,5 +111,20 @@ public sealed class WindowsLapsModel : PortalPage
 
     public Task<IActionResult> OnGet() => Load(false);
 
-    public Task<IActionResult> OnPost(string action) => action == "reveal" ? Load(true) : Task.FromResult<IActionResult>(BadRequest());
+    public async Task<IActionResult> OnPost(string action)
+    {
+        if (action == "reveal") return await Load(true);
+        if (action != "expire") return BadRequest();
+        // "Expire now" (AD) / "Rotate now" (Intune): administrators only, switched on separately, audited.
+        var page = await Load(false);
+        if (page is not Microsoft.AspNetCore.Mvc.RazorPages.PageResult) return page;
+        if (Source == null || Id == Guid.Empty || !Laps.CanRotate(Identity, Source)) return Forbid();
+        string message = null, failure = null;
+        try { message = Source == "ad" ? await Task.Run(() => laps.ExpireAd(Id)) : await laps.RotateEntra(Id); }
+        catch (WindowsLapsException ex) { failure = ex.Message; }
+        Store.Audit(Identity.Actor, (Source == "ad" ? "windows-laps-expire-ad" : "windows-laps-rotate-entra") + (failure == null ? ":" : "-failed:") + Id.ToString("D"), Guid.Empty, Guid.Empty);
+        if (Request.Headers["X-Slaps-Ajax"] == "1") return new JsonResult(new { ok = failure == null, message = failure ?? message });
+        if (failure != null) Errors.Add(failure); else RotateMessage = message;
+        return page;
+    }
 }

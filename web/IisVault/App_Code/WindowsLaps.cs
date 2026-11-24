@@ -131,6 +131,15 @@ namespace StandaloneLapsWeb
             return "(&(objectCategory=computer)(|(name=" + value + ")(dNSHostName=" + value + "))(|" + (stored.Length == 0 ? "(objectClass=__none__)" : stored) + "))";
         }
 
+        // Result text after setting the expiry to now (AD). The device itself creates the new password.
+        public static string ExpireMessage(bool modern, bool legacy)
+        {
+            var parts = new List<string>();
+            if (modern) parts.Add("Windows LAPS (rotates at its next processing cycle, normally within an hour; immediately with Invoke-LapsPolicyProcessing on the device)");
+            if (legacy) parts.Add("legacy LAPS (rotates at the next Group Policy refresh, normally within 90 minutes; immediately with gpupdate on the device)");
+            return "Password expiry set to now for " + string.Join(" and ", parts.ToArray()) + ". The current password keeps working until the device has changed it.";
+        }
+
         public static string ODataLiteral(string value) { return "'" + (value ?? "").Replace("'", "''") + "'"; }
 
         // Large-integer FILETIME as AD returns it (decimal string); 0 or "never" values give null.
