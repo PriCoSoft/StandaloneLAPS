@@ -44,6 +44,25 @@ Whoever controls the running container (or has the master key plus the database)
 exactly like an administrator of the IIS server in the IIS variant. Keep the master key offline as well:
 **without it the database cannot be used.**
 
+## Prebuilt image and automatic updates
+
+Every release is also published as a ready-made image (linux/amd64 and linux/arm64) in the GitHub Container
+Registry. It is built by GitHub Actions from the signed container package of the release, so it contains the same
+server and the same signed agent files.
+
+| Tag | Follows |
+|---|---|
+| `ghcr.io/pricosoft/standalonelaps:1.6.2` | exactly this release (manual updates) |
+| `ghcr.io/pricosoft/standalonelaps:1.6` | all 1.6.x patch releases (recommended for automatic updates) |
+| `ghcr.io/pricosoft/standalonelaps:1` | all 1.x releases |
+| `ghcr.io/pricosoft/standalonelaps:latest` | every release |
+
+Use `compose.image.yaml` instead of `compose.yaml` (same settings, no `build:`). Update with
+`docker compose -f compose.image.yaml pull && docker compose -f compose.image.yaml up -d`, or let an updater
+(e.g. Watchtower) watch the container. The data volume, the master key secret and the settings are kept; the
+database schema is upgraded on start. As with every update, back up the `/data` volume first (for SQLite) or the
+PostgreSQL database.
+
 ## Quick start (release package)
 
 Download `StandaloneLaps-Container-<version>-<timestamp>.zip` from the

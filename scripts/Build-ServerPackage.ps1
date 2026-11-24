@@ -195,7 +195,7 @@ if ($compose -notmatch ('slaps-server:' + [regex]::Escape($version))) { throw "c
 $compose = [regex]::Replace($compose, '(?m)^    build:\r?\n      context: \.\.\r?\n      dockerfile: container/Dockerfile\r?\n', "    build: .`n")
 if ($compose -match 'container/Dockerfile') { throw 'Could not rewrite the build section of compose.yaml.' }
 Set-Content -LiteralPath (Join-Path $containerStage 'compose.yaml') -Value $compose -Encoding UTF8
-Copy-Item -LiteralPath (Join-Path $root 'container\compose.postgres.yaml'), (Join-Path $root 'docs\Container.md'), (Join-Path $root 'LICENSE'), (Join-Path $root 'NOTICE') -Destination $containerStage
+Copy-Item -LiteralPath (Join-Path $root 'container\compose.postgres.yaml'), (Join-Path $root 'container\compose.image.yaml'), (Join-Path $root 'docs\Container.md'), (Join-Path $root 'LICENSE'), (Join-Path $root 'NOTICE') -Destination $containerStage
 $containerZip = $containerStage + $(if ($SkipSigning) { '-UNSIGNED.zip' } else { '.zip' })
 Compress-Archive -Path (Join-Path $containerStage '*') -DestinationPath $containerZip
 Write-Host "Container package: $containerZip"

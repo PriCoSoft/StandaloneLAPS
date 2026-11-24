@@ -1,0 +1,93 @@
+# GitHub Actions workflow (published in the GitHub repository as .github/workflows/container-image.yml).
+# Builds the SLAPS container image from the signed container package of a release and pushes it to the
+# GitHub Container Registry, so Docker hosts can pull and auto-update instead of building locally:
+#   ghcr.io/pricosoft/standalonelaps:<version>  e.g. 1.6.2   (fixed)
+#   ghcr.io/pricosoft/standalonelaps:<minor>    e.g. 1.6     (patch updates)
+#   ghcr.io/pricosoft/standalonelaps:<major>    e.g. 1       (minor and patch updates)
+#   ghcr.io/pricosoft/standalonelaps:latest
+# The release ZIP already contains the published server, the signed Windows/Linux agent files and a runtime-only
+# Dockerfile, so the image is exactly what the release ships (no source build, no unsigned agent).
+name: Container image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build, e.g. v1.6.2
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: container-image-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve version
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "Unexpected tag '$TAG' (expected vX.Y.Z)"; exit 1 ;; esac
+          version="${TAG#v}"
+          {
+            echo "tag=$TAG"
+            echo "version=$version"
+            echo "minor=${version%.*}"
+            echo "major=${version%%.*}"
+            echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/standalonelaps"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download container package of the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'StandaloneLaps-Container-*.zip' --dir package
+          count=$(ls package/*.zip | wc -l)
+          if [ "$count" -ne 1 ]; then echo "Expected exactly one container package, found $count"; exit 1; fi
+          case "$(ls package/*.zip)" in *UNSIGNED*) echo "Refusing to publish an unsigned package"; exit 1 ;; esac
+          unzip -q package/*.zip -d context
+          test -f context/Dockerfile && test -f context/app/StandaloneLaps.Server.dll && test -f context/agent-package/StandaloneLaps.Agent.exe
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: context
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.version.outputs.image }}:${{ steps.version.outputs.version }}
+            ${{ steps.version.outputs.image }}:${{ steps.version.outputs.minor }}
+            ${{ steps.version.outputs.image }}:${{ steps.version.outputs.major }}
+            ${{ steps.version.outputs.image }}:latest
+          labels: |
+            org.opencontainers.image.title=SLAPS container server
+            org.opencontainers.image.description=Standalone LAPS server (agent API and admin portal)
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.vendor=PriCoSoft GmbH
+
+      - name: Smoke test
+        env:
+          IMAGE: ${{ steps.version.outputs.image }}:${{ steps.version.outputs.version }}
+        run: |
+          docker run --rm "$IMAGE" version
+          docker run --rm --entrypoint /opt/dpapi/bin/python "$IMAGE" -c "import dpapi_ng; print('dpapi-ng', dpapi_ng.__name__)"
