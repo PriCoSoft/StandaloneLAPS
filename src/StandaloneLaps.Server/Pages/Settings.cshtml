@@ -78,12 +78,12 @@ else
 <dl>
 <dt>Tenant ID</dt><dd class="mono">@laps.EntraTenantId</dd>
 <dt>Application (client) ID</dt><dd class="mono">@laps.EntraClientId</dd>
-<dt>Credential</dt><dd>@(!string.IsNullOrEmpty(laps.EntraCertificatePath) ? "Certificate " + laps.EntraCertificatePath : !string.IsNullOrEmpty(laps.EntraClientSecret) ? "Client secret" : "Not configured")</dd>
+<dt>Credential</dt><dd>@Model.LapsCredential</dd>
 <dt>Permission</dt><dd>Microsoft Graph <code>DeviceLocalCredential.Read.All</code> (application, admin consent)</dd>
 <dt>History</dt><dd>@(laps.EntraHistory ? "Older passwords are shown" : "Only the current password")</dd>
 <dt>Rotate via Intune</dt><dd>@(laps.EntraAllowRotate ? "On (administrators; needs DeviceManagementManagedDevices.Read.All and DeviceManagementManagedDevices.PrivilegedOperations.All)" : "Off (Slaps__WindowsLapsEntraAllowRotate)")</dd>
 </dl>
-@if (identity.IsAdmin && laps.EntraEnabled) {<form method="post" data-ajax><button class="button secondary" type="submit" name="action" value="test-entra" data-busy="Testing…">Test Entra connection</button><p class="ajax-result" hidden aria-live="polite"></p></form>}
+@if (identity.IsAdmin) {<div class="form-actions"><a class="button" href="entrasetup">Open Entra setup</a>@if (laps.EntraEnabled) {<form method="post" data-ajax data-ajax-result="entra-test-result"><button class="button secondary" type="submit" name="action" value="test-entra" data-busy="Testing…">Test Entra connection</button></form>}</div><p class="ajax-result" id="entra-test-result" hidden aria-live="polite"></p>}
 </div>
 </section>
 

@@ -67,7 +67,8 @@ internal static class TestRunner
         ["Slaps:MasterKey"] = masterKey, ["Slaps:AuthMode"] = "Development", ["Slaps:TlsDnsNames"] = "localhost;127.0.0.1",
         ["Logging:LogLevel:Default"] = "Warning",
         // Windows LAPS lookup against a closed local port: the page and error handling are exercised without touching a real directory.
-        ["Slaps:WindowsLapsAdEnabled"] = "true", ["Slaps:WindowsLapsAdServer"] = "127.0.0.1", ["Slaps:WindowsLapsAdPort"] = "1", ["Slaps:WindowsLapsAdUseSsl"] = "false", ["Slaps:WindowsLapsAdAllowExpire"] = "true"
+        ["Slaps:WindowsLapsAdEnabled"] = "true", ["Slaps:WindowsLapsAdServer"] = "127.0.0.1", ["Slaps:WindowsLapsAdPort"] = "1", ["Slaps:WindowsLapsAdUseSsl"] = "false", ["Slaps:WindowsLapsAdAllowExpire"] = "true",
+        ["Slaps:WindowsLapsEntraTenantId"] = "11111111-2222-3333-4444-555555555555", ["Slaps:WindowsLapsEntraClientId"] = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     };
 
     private static void CreateAgentFiles(string directory)
@@ -228,6 +229,27 @@ internal static class TestRunner
             var readerExpire = new HttpRequestMessage(HttpMethod.Post, expireUrl) { Content = Form(settingsLaps, ("action", "expire")) };
             readerExpire.Headers.Add("X-Slaps-Development-Role", "reader");
             Check("readers cannot expire passwords", (await portalClient.SendAsync(readerExpire)).StatusCode == HttpStatusCode.Forbidden);
+            Console.WriteLine("Entra setup");
+            var setup = await portalClient.GetStringAsync(baseUrl + "entrasetup");
+            Check("Entra setup page for administrators shows the consent redirect URI", setup.Contains("Create certificate") && setup.Contains($"https://localhost:{portal}/entra-consent"));
+            var readerSetup = new HttpRequestMessage(HttpMethod.Get, baseUrl + "entrasetup");
+            readerSetup.Headers.Add("X-Slaps-Development-Role", "reader");
+            Check("readers cannot open the Entra setup", (await portalClient.SendAsync(readerSetup)).StatusCode == HttpStatusCode.Forbidden);
+            var created = await (await portalClient.PostAsync(baseUrl + "entrasetup", Form(setup, ("action", "create")))).Content.ReadAsStringAsync();
+            Check("certificate created by the setup", created.Contains("Download public certificate") && created.Contains("notice success"));
+            var cer = await portalClient.GetByteArrayAsync(baseUrl + "entrasetup?download=cer");
+            using (var downloaded = X509CertificateLoader.LoadCertificate(cer))
+                Check("public certificate download has no private key and is a client-authentication certificate", !downloaded.HasPrivateKey && downloaded.Subject.Contains("SLAPS Graph access") && downloaded.Extensions.OfType<X509EnhancedKeyUsageExtension>().Single().EnhancedKeyUsages[0].Value == KeyVault.ClientAuthOid);
+            Check("Graph certificate is stored master-key encrypted in the database", store.Key(WindowsLapsService.GraphKey) != null && Throws<CryptographicException>(() => X509CertificateLoader.LoadPkcs12(store.Key(WindowsLapsService.GraphKey).Pkcs12, null)));
+            var consent = await portalClient.PostAsync(baseUrl + "entrasetup", Form(setup, ("action", "consent")));
+            var location = consent.Headers.Location?.AbsoluteUri ?? "";
+            Check("admin consent redirects to Microsoft with the entra-consent redirect URI", consent.StatusCode == HttpStatusCode.Redirect && location.StartsWith("https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0/adminconsent?client_id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") && location.Contains(Uri.EscapeDataString($"https://localhost:{portal}/entra-consent")), location);
+            var consentState = System.Web.HttpUtility.ParseQueryString(new Uri(location).Query)["state"];
+            var back = await portalClient.GetAsync(baseUrl + "entra-consent?admin_consent=True&tenant=11111111-2222-3333-4444-555555555555&state=" + Uri.EscapeDataString(consentState));
+            Check("consent return is recorded and leads back to the setup", back.StatusCode == HttpStatusCode.Redirect && (await portalClient.GetStringAsync(baseUrl + "entrasetup")).Contains("Last consent: granted"));
+            Check("consent return with a forged state is rejected", (await portalClient.GetAsync(baseUrl + "entra-consent?admin_consent=True&state=forged")).StatusCode == HttpStatusCode.Forbidden);
+            Check("CSP allows the redirect of the consent form to Microsoft", consent.Headers.GetValues("Content-Security-Policy").First().Contains("form-action 'self' https://login.microsoftonline.com"));
+            await WindowsLapsTests.Renewal(Check, store, keys);
             Check("Windows LAPS reveal without antiforgery token is rejected", (await portalClient.PostAsync(baseUrl + "windowslaps?source=ad&id=" + Guid.NewGuid() + "&tab=password", new FormUrlEncodedContent(new Dictionary<string, string> { ["action"] = "reveal" }))).StatusCode == HttpStatusCode.BadRequest);
 
             Console.WriteLine("Retention, delete, restore, rekey");

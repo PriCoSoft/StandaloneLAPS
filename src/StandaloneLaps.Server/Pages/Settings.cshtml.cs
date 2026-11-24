@@ -17,6 +17,7 @@ public sealed class SettingsModel : PortalPage
     }
 
     public string LapsTest, LapsTestError;
+    public string LapsCredential => laps.CredentialSource;
 
     public override string Active => "settings";
     public string ErrorText, SavedText;

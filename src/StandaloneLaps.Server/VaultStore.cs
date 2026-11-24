@@ -239,6 +239,31 @@ public sealed class VaultStore
         transaction.Commit();
     }
 
+    public void RemoveKey(string name, string actor)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        using (var command = Command(connection, transaction, "DELETE FROM slaps_keys WHERE name = @n", ("@n", name))) command.ExecuteNonQuery();
+        AuditCore(connection, transaction, actor, "key-removed-" + name, Guid.Empty, Guid.Empty);
+        transaction.Commit();
+    }
+
+    // Named JSON documents in slaps_settings (e.g. the Entra setup state); "portal" stays reserved for PortalSettings.
+    public string GetDocument(string name)
+    {
+        using var connection = Open();
+        using var command = Command(connection, null, "SELECT value FROM slaps_settings WHERE name = @n", ("@n", name));
+        return command.ExecuteScalar() as string;
+    }
+
+    public void SetDocument(string name, string json)
+    {
+        if (name == "portal") throw new ArgumentException("Reserved setting name.", nameof(name));
+        using var connection = Open();
+        using var command = Command(connection, null, "INSERT INTO slaps_settings (name, value) VALUES (@n, @v) ON CONFLICT (name) DO UPDATE SET value = excluded.value", ("@n", name), ("@v", json));
+        command.ExecuteNonQuery();
+    }
+
     // ---- Clients ----------------------------------------------------------------------------------
 
     public AgentClient[] Clients()

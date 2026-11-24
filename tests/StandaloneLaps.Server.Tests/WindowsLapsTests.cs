@@ -33,7 +33,7 @@ internal static class WindowsLapsTests
         check("Windows LAPS lookup is off by default", !defaults.WindowsLaps.Enabled && !defaults.WindowsLaps.ReaderAllowed, null);
         var entra = Load(new Dictionary<string, string> { ["OidcAuthority"] = "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0", ["OidcClientId"] = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", ["WindowsLapsEntraEnabled"] = "true", ["WindowsLapsEntraClientSecret"] = "s" });
         check("Entra tenant and client default to the OIDC sign-in values", entra.WindowsLaps.EntraTenantId == "11111111-2222-3333-4444-555555555555" && entra.WindowsLaps.EntraClientId == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", null);
-        check("Entra lookup without secret or certificate is rejected", Throws(() => Load(new Dictionary<string, string> { ["WindowsLapsEntraEnabled"] = "true", ["WindowsLapsEntraTenantId"] = Guid.NewGuid().ToString(), ["WindowsLapsEntraClientId"] = Guid.NewGuid().ToString() })), null);
+        check("Entra lookup without secret or certificate is allowed (certificate comes from the setup page)", !Throws(() => Load(new Dictionary<string, string> { ["WindowsLapsEntraEnabled"] = "true", ["WindowsLapsEntraTenantId"] = Guid.NewGuid().ToString(), ["WindowsLapsEntraClientId"] = Guid.NewGuid().ToString() })), null);
         check("invalid decrypt mode is rejected", Throws(() => Load(new Dictionary<string, string> { ["WindowsLapsAdEnabled"] = "true", ["WindowsLapsAdServer"] = "dc", ["WindowsLapsAdUsername"] = "u", ["WindowsLapsAdPassword"] = "p", ["WindowsLapsAdDecryptMode"] = "magic" })), null);
         var explicitCredentials = new WindowsLapsOptions { AdEnabled = true, AdUsername = "svc@corp.example", AdPassword = "x" };
         check("explicit AD credentials use the Python helper (native DPAPI-NG only uses the process identity)", explicitCredentials.UsePython && !new WindowsLapsOptions { AdEnabled = true }.UsePython == OperatingSystem.IsWindows(), null);
@@ -122,6 +122,80 @@ internal static class WindowsLapsTests
             check("Graph parsing matches the IIS portal (documented value wrapper, UTF-16 sample)", WindowsLapsService.ParseCredentials("{\"value\":{\"id\":\"b465e4e8-e4e8-b465-e8e4-65b4e8e465b4\",\"credentials\":[{\"accountName\":\"A\",\"backupDateTime\":\"2023-04-21T13:45:30Z\",\"passwordBase64\":\"UQBRAEAAZAA4AGYAOABnAFkA\"}]}}", true).Credentials.Single().Password == "QQ@d8f8gY", null);
         }
         finally { try { Directory.Delete(directory, true); } catch (IOException) { } }
+    }
+
+    // ---- Entra setup: certificate in the database, renewal via addKey/removeKey (simulated Graph) ------------
+
+    private sealed class RenewalGraph : HttpMessageHandler
+    {
+        public readonly HashSet<string> Accepted = new(StringComparer.OrdinalIgnoreCase);
+        public readonly List<string> Added = new(), Removed = new();
+        public string ProofIssuer, RejectExcept;
+
+        private static string X5t(string jwt)
+        {
+            var part = jwt.Split('.')[0];
+            var header = JsonDocument.Parse(Convert.FromBase64String(part.Replace('-', '+').Replace('_', '/') + new string('=', (4 - part.Length % 4) % 4))).RootElement;
+            var raw = header.GetProperty("x5t").GetString();
+            return Convert.ToHexString(Convert.FromBase64String(raw.Replace('-', '+').Replace('_', '/') + new string('=', (4 - raw.Length % 4) % 4)));
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var url = request.RequestUri!.AbsoluteUri;
+            var body = request.Content == null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
+            if (url.Contains("/oauth2/v2.0/token"))
+            {
+                var assertion = Uri.UnescapeDataString(body.Split('&').First(p => p.StartsWith("client_assertion=")).Substring(17));
+                var thumbprint = X5t(assertion);
+                if (!Accepted.Contains(thumbprint) || (RejectExcept != null && !string.Equals(thumbprint, RejectExcept, StringComparison.OrdinalIgnoreCase)))
+                    return new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent("{\"error\":\"invalid_client\",\"error_description\":\"AADSTS700027 key not found\"}") };
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"access_token\":\"tok\",\"expires_in\":3600}") };
+            }
+            if (url.EndsWith("/addKey"))
+            {
+                var json = JsonDocument.Parse(body).RootElement;
+                var proof = json.GetProperty("proof").GetString().Split('.')[1];
+                ProofIssuer = JsonDocument.Parse(Convert.FromBase64String(proof.Replace('-', '+').Replace('_', '/') + new string('=', (4 - proof.Length % 4) % 4))).RootElement.GetProperty("iss").GetString();
+                using var added = X509CertificateLoader.LoadCertificate(Convert.FromBase64String(json.GetProperty("keyCredential").GetProperty("key").GetString()));
+                Accepted.Add(added.Thumbprint);
+                var keyId = Guid.NewGuid().ToString("D");
+                Added.Add(keyId);
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"keyId\":\"" + keyId + "\"}") };
+            }
+            if (url.EndsWith("/removeKey")) { Removed.Add(JsonDocument.Parse(body).RootElement.GetProperty("keyId").GetString()); return new HttpResponseMessage(HttpStatusCode.NoContent); }
+            if (url.Contains("/deviceLocalCredentials?")) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"value\":[{\"id\":\"b465e4e8-e4e8-b465-e8e4-65b4e8e465b4\",\"deviceName\":\"X\"}]}") };
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        }
+    }
+
+    public static async Task Renewal(Action<string, bool, string> check, VaultStore store, KeyVault keys)
+    {
+        var objectId = "99999999-0000-1111-2222-333333333333";
+        var options = new ServerOptions
+        {
+            ServerName = "slaps-test",
+            WindowsLaps = new WindowsLapsOptions { EntraEnabled = true, EntraTenantId = "11111111-2222-3333-4444-555555555555", EntraClientId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }
+        };
+        var graph = new RenewalGraph();
+        var service = new WindowsLapsService(options, graph, store, keys);
+        if (!service.SetupConfigured) service.CreateSetupCertificate("test:admin");
+        var state = service.SetupState();
+        graph.Accepted.Add(state.CurrentThumbprint);
+        check("setup certificate is stored encrypted in the database and used for Graph", service.CredentialSource.Contains("created by the setup") && (await service.TestEntra()).Contains("works"), null);
+        state.ObjectId = objectId;
+        service.SaveSetupState(state);
+        var first = state.CurrentThumbprint;
+        var message = await service.Renew("test:admin");
+        state = service.SetupState();
+        check("renewal adds a key with proof of possession (issuer = object ID) and switches", message.StartsWith("Renewed") && state.CurrentThumbprint != first && graph.ProofIssuer == objectId && state.CurrentKeyId == graph.Added[0] && store.Key(WindowsLapsService.GraphPendingKey) == null, message);
+        graph.RejectExcept = state.CurrentThumbprint;
+        message = await service.Renew("test:admin");
+        state = service.SetupState();
+        check("new key not yet accepted by Entra: kept pending in the database, current certificate stays", message.Contains("becomes active as soon as") && state.PendingThumbprint != null && store.Key(WindowsLapsService.GraphPendingKey) != null, message);
+        graph.RejectExcept = null;
+        message = await service.Renew("test:admin");
+        check("pending key activated later; previous key removed via removeKey", message.StartsWith("Renewed") && graph.Added.Count == 2 && graph.Removed.SequenceEqual(new[] { graph.Added[0] }) && service.SetupState().PendingThumbprint == null, message);
     }
 
     // ---- DPAPI-NG helper protocol ------------------------------------------------------------------------

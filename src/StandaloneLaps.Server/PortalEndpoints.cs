@@ -42,6 +42,8 @@ public static class PortalEndpoints
                 : Results.File(match.Raw, "application/pkix-cert", match.FileName + ".cer");
         }).RequireAuthorization(PortalAuth.ReaderPolicy);
 
+        app.MapGet("/entra-consent", StandaloneLaps.Server.Pages.EntraSetupModel.CompleteConsent).RequireAuthorization(PortalAuth.AdminPolicy);
+
         app.MapGet("/signout", async (HttpContext context, ServerOptions options) =>
         {
             if (options.DevelopmentAuth) return Results.Redirect("/");

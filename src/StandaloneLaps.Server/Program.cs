@@ -66,7 +66,7 @@ namespace StandaloneLaps.Server
             builder.Services.AddSingleton(keys);
             builder.Services.AddSingleton<ClientPackages>();
             builder.Services.AddSingleton<AgentApi>();
-            builder.Services.AddSingleton(new WindowsLapsService(options));
+            builder.Services.AddSingleton(new WindowsLapsService(options, null, store, keys));
             // Session cookies and antiforgery tokens are protected with in-memory keys: a restart signs everybody out,
             // and nothing in the data volume can be used to forge a portal session.
             builder.Services.AddDataProtection().UseEphemeralDataProtectionProvider();
@@ -75,6 +75,7 @@ namespace StandaloneLaps.Server
             {
                 o.Conventions.AuthorizeFolder("/", PortalAuth.ReaderPolicy);
                 o.Conventions.AuthorizePage("/AddClient", PortalAuth.AdminPolicy);
+                o.Conventions.AuthorizePage("/EntraSetup", PortalAuth.AdminPolicy);
                 o.Conventions.AllowAnonymousToPage("/Denied");
             }).ConfigureApplicationPartManager(manager =>
             {
@@ -179,7 +180,12 @@ namespace StandaloneLaps.Server
             return app;
         }
 
-        private static string FormActionSources(ServerOptions options) =>
-            Uri.TryCreate(options.OidcAuthority, UriKind.Absolute, out var authority) ? authority.GetLeftPart(UriPartial.Authority) : "";
+        // Sign-in provider plus the Entra admin consent of the Windows LAPS setup (form POST redirected to Microsoft).
+        private static string FormActionSources(ServerOptions options)
+        {
+            var sources = new List<string> { "https://login.microsoftonline.com" };
+            if (Uri.TryCreate(options.OidcAuthority, UriKind.Absolute, out var authority)) sources.Add(authority.GetLeftPart(UriPartial.Authority));
+            return string.Join(" ", sources.Distinct(StringComparer.OrdinalIgnoreCase));
+        }
     }
 }

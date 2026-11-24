@@ -81,6 +81,13 @@ public sealed class KeyVault : IDisposable
         }
     }
 
+    // Optional keys (e.g. the Graph certificate of the Entra setup): null when not stored.
+    public X509Certificate2 OpenKey(string name)
+    {
+        var key = store.Key(name);
+        return key == null ? null : Load(key);
+    }
+
     public StoredKey Protect(string name, X509Certificate2 certificate) => new()
     {
         Name = name, Sha256 = Wire.Sha256(certificate.RawData), CreatedUtc = Wire.Now(),

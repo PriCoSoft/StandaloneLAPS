@@ -70,13 +70,31 @@ public sealed class WindowsLapsOptions
         {
             if (!Guid.TryParse(EntraTenantId, out _) || !Guid.TryParse(EntraClientId, out _))
                 throw new InvalidOperationException("Set Slaps:WindowsLapsEntraTenantId and Slaps:WindowsLapsEntraClientId (defaults: tenant from OidcAuthority, OidcClientId).");
-            if (string.IsNullOrEmpty(EntraCertificatePath) && string.IsNullOrEmpty(EntraClientSecret))
-                throw new InvalidOperationException("Set Slaps:WindowsLapsEntraCertificatePath (PFX, recommended) or Slaps:WindowsLapsEntraClientSecret[File] for the Entra lookup.");
         }
     }
 }
 
 public sealed class WindowsLapsException(string message) : Exception(message);
+
+// State of the Entra setup certificate (slaps_settings "entra-setup"); the certificates themselves are in slaps_keys.
+public sealed class EntraSetupState
+{
+    public string ObjectId { get; set; }
+    public string CurrentThumbprint { get; set; }
+    public DateTime? CurrentNotAfter { get; set; }
+    public DateTime? CurrentCreatedUtc { get; set; }
+    public string CurrentKeyId { get; set; }
+    public string PendingThumbprint { get; set; }
+    public DateTime? PendingNotAfter { get; set; }
+    public DateTime? PendingCreatedUtc { get; set; }
+    public string PendingKeyId { get; set; }
+    public DateTime? LastAttemptUtc { get; set; }
+    public DateTime? LastRenewalUtc { get; set; }
+    public string LastRenewalError { get; set; }
+    public DateTime? ConsentUtc { get; set; }
+    public string ConsentBy { get; set; }
+    public string ConsentResult { get; set; }
+}
 
 // Active Directory (LDAP; LDAPS simple bind on Linux, Kerberos on Windows), DPAPI-NG decryption (native ncrypt.dll on
 // Windows, the Python dpapi-ng library elsewhere, like LAPS-WebUI) and Microsoft Entra ID via Microsoft Graph.
@@ -90,10 +108,16 @@ public sealed class WindowsLapsService
     private readonly SemaphoreSlim tokenGate = new(1, 1);
     private string token;
     private DateTime tokenExpiresUtc;
+    private readonly VaultStore store;
+    private readonly KeyVault keys;
+    private readonly string hostName;
 
-    public WindowsLapsService(ServerOptions server, HttpMessageHandler handler = null)
+    public WindowsLapsService(ServerOptions server, HttpMessageHandler handler = null, VaultStore store = null, KeyVault keys = null)
     {
         options = server.WindowsLaps;
+        this.store = store;
+        this.keys = keys;
+        hostName = server.HostName;
         http = handler == null ? new HttpClient() : new HttpClient(handler);
         http.Timeout = TimeSpan.FromSeconds(20);
         http.DefaultRequestHeaders.UserAgent.ParseAdd("PriCoSoft-SLAPS/" + AppVersion.Number);
@@ -155,7 +179,7 @@ public sealed class WindowsLapsService
         return "Connected to " + dc + " as " + (options.AdUsername ?? Environment.UserName) + ". Search base: " + searchBase + ".";
     }
 
-    public string CredentialSource => !string.IsNullOrEmpty(options.EntraCertificatePath) ? "Certificate " + options.EntraCertificatePath : !string.IsNullOrEmpty(options.EntraClientSecret) ? "Client secret" : "Not configured";
+
 
     public async Task<string> TestEntra()
     {
@@ -426,56 +450,248 @@ public sealed class WindowsLapsService
         return result;
     }
 
-    public static string ClientAssertion(X509Certificate2 certificate, string tenantId, string clientId, DateTime utcNow)
+    private static string B64(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    // Signed JWT for client assertions and key-rollover proofs (RS256 with x5t and x5t#S256 headers).
+    public static string SignJwt(X509Certificate2 certificate, Dictionary<string, object> claims)
     {
-        var now = new DateTimeOffset(utcNow).ToUnixTimeSeconds();
-        static string B64(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         var header = JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object>
         {
             ["alg"] = "RS256", ["typ"] = "JWT", ["x5t"] = B64(certificate.GetCertHash()), ["x5t#S256"] = B64(certificate.GetCertHash(HashAlgorithmName.SHA256))
         });
-        var claims = JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object>
-        {
-            ["aud"] = "https://login.microsoftonline.com/" + tenantId + "/oauth2/v2.0/token", ["iss"] = clientId, ["sub"] = clientId,
-            ["jti"] = Guid.NewGuid().ToString("D"), ["nbf"] = now - 60, ["iat"] = now, ["exp"] = now + 600
-        });
-        var unsigned = B64(header) + "." + B64(claims);
+        var unsigned = B64(header) + "." + B64(JsonSerializer.SerializeToUtf8Bytes(claims));
         using var rsa = certificate.GetRSAPrivateKey() ?? throw new WindowsLapsException("The Entra application certificate has no RSA private key.");
         return unsigned + "." + B64(rsa.SignData(Encoding.ASCII.GetBytes(unsigned), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1));
     }
 
+    public static string ClientAssertion(X509Certificate2 certificate, string tenantId, string clientId, DateTime utcNow)
+    {
+        var now = new DateTimeOffset(utcNow).ToUnixTimeSeconds();
+        return SignJwt(certificate, new Dictionary<string, object>
+        {
+            ["aud"] = "https://login.microsoftonline.com/" + tenantId + "/oauth2/v2.0/token", ["iss"] = clientId, ["sub"] = clientId,
+            ["jti"] = Guid.NewGuid().ToString("D"), ["nbf"] = now - 60, ["iat"] = now, ["exp"] = now + 600
+        });
+    }
+
+    // Proof of possession for applications/{objectId}/addKey and removeKey (signed with a currently valid key).
+    public static string KeyProof(X509Certificate2 certificate, string objectId, DateTime utcNow)
+    {
+        var now = new DateTimeOffset(utcNow).ToUnixTimeSeconds();
+        return SignJwt(certificate, new Dictionary<string, object> { ["aud"] = "00000002-0000-0000-c000-000000000000", ["iss"] = objectId, ["nbf"] = now, ["exp"] = now + 600 });
+    }
+
+    // Requests an app-only Graph token with the given certificate, or the configured client secret when null.
+    private async Task<(string Token, int Seconds)> RequestToken(X509Certificate2 certificate)
+    {
+        if (!Guid.TryParse(options.EntraTenantId, out _) || !Guid.TryParse(options.EntraClientId, out _))
+            throw new WindowsLapsException("Set Slaps__WindowsLapsEntraTenantId and Slaps__WindowsLapsEntraClientId (defaults: tenant from OidcAuthority, OidcClientId).");
+        var form = new Dictionary<string, string> { ["client_id"] = options.EntraClientId, ["grant_type"] = "client_credentials", ["scope"] = "https://graph.microsoft.com/.default" };
+        if (certificate != null)
+        {
+            form["client_assertion_type"] = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+            form["client_assertion"] = ClientAssertion(certificate, options.EntraTenantId, options.EntraClientId, DateTime.UtcNow);
+        }
+        else if (!string.IsNullOrEmpty(options.EntraClientSecret)) form["client_secret"] = options.EntraClientSecret;
+        else throw new WindowsLapsException("No Graph credential: run the Entra setup on the Settings page, or set Slaps__WindowsLapsEntraCertificatePath / Slaps__WindowsLapsEntraClientSecret.");
+        var json = await Send(new HttpRequestMessage(HttpMethod.Post, "https://login.microsoftonline.com/" + options.EntraTenantId + "/oauth2/v2.0/token") { Content = new FormUrlEncodedContent(form) }, false);
+        using var document = JsonDocument.Parse(json);
+        var value = Text(document.RootElement, "access_token") ?? throw new WindowsLapsException("Microsoft Entra ID returned no access token.");
+        return (value, document.RootElement.TryGetProperty("expires_in", out var expires) && expires.TryGetInt32(out var seconds) ? seconds : 3600);
+    }
+
+    // Credential precedence: PFX from the environment > certificate of the setup (database) > client secret.
+    private X509Certificate2 SigningCertificate()
+    {
+        if (!string.IsNullOrEmpty(options.EntraCertificatePath))
+        {
+            try { return X509CertificateLoader.LoadPkcs12FromFile(options.EntraCertificatePath, options.EntraCertificatePassword, X509KeyStorageFlags.EphemeralKeySet); }
+            catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException)
+            { throw new WindowsLapsException("The Entra application certificate (WindowsLapsEntraCertificatePath) cannot be loaded: " + ex.Message); }
+        }
+        return keys?.OpenKey(GraphKey);
+    }
+
     private async Task<string> AccessToken()
     {
+        await MaybeRenew();
         await tokenGate.WaitAsync();
         try
         {
             if (token != null && DateTime.UtcNow < tokenExpiresUtc) return token;
-            var form = new Dictionary<string, string>
-            {
-                ["client_id"] = options.EntraClientId, ["grant_type"] = "client_credentials", ["scope"] = "https://graph.microsoft.com/.default"
-            };
-            if (!string.IsNullOrEmpty(options.EntraCertificatePath))
-            {
-                X509Certificate2 certificate;
-                try { certificate = X509CertificateLoader.LoadPkcs12FromFile(options.EntraCertificatePath, options.EntraCertificatePassword, X509KeyStorageFlags.EphemeralKeySet); }
-                catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException)
-                { throw new WindowsLapsException("The Entra application certificate (WindowsLapsEntraCertificatePath) cannot be loaded: " + ex.Message); }
-                using (certificate)
-                {
-                    form["client_assertion_type"] = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
-                    form["client_assertion"] = ClientAssertion(certificate, options.EntraTenantId, options.EntraClientId, DateTime.UtcNow);
-                }
-            }
-            else form["client_secret"] = options.EntraClientSecret;
-            var json = await Send(new HttpRequestMessage(HttpMethod.Post, "https://login.microsoftonline.com/" + options.EntraTenantId + "/oauth2/v2.0/token") { Content = new FormUrlEncodedContent(form) }, false);
-            using var document = JsonDocument.Parse(json);
-            token = Text(document.RootElement, "access_token") ?? throw new WindowsLapsException("Microsoft Entra ID returned no access token.");
-            var seconds = document.RootElement.TryGetProperty("expires_in", out var expires) && expires.TryGetInt32(out var value) ? value : 3600;
+            using var certificate = SigningCertificate();
+            var (value, seconds) = await RequestToken(certificate);
+            token = value;
             tokenExpiresUtc = DateTime.UtcNow.AddSeconds(Math.Max(60, seconds - 300));
             return token;
         }
         finally { tokenGate.Release(); }
     }
+
+    public void ResetToken() => token = null;
+
+    // ---- Entra setup: certificate created by SLAPS, stored encrypted with the master key, renewed by itself ----
+
+    public const string GraphKey = "graph", GraphPendingKey = "graph-pending", SetupDocument = "entra-setup";
+    public const int ValidityDays = 365, RenewBeforeDays = 30;
+    private readonly SemaphoreSlim renewGate = new(1, 1);
+    private DateTime lastAutomaticAttempt = DateTime.MinValue;
+
+    public EntraSetupState SetupState()
+    {
+        var json = store?.GetDocument(SetupDocument);
+        return json == null ? new EntraSetupState() : JsonSerializer.Deserialize<EntraSetupState>(json) ?? new EntraSetupState();
+    }
+
+    public void SaveSetupState(EntraSetupState state) => store.SetDocument(SetupDocument, JsonSerializer.Serialize(state));
+
+    public bool SetupConfigured => store?.Key(GraphKey) != null;
+
+    public static X509Certificate2 NewGraphCertificate(DateTime utcNow, string host)
+    {
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest("CN=SLAPS Graph access " + host, rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
+        request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new Oid(KeyVault.ClientAuthOid) }, false));
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+        using var created = request.CreateSelfSigned(new DateTimeOffset(utcNow.AddMinutes(-10)), new DateTimeOffset(utcNow.AddDays(ValidityDays)));
+        return X509CertificateLoader.LoadPkcs12(created.Export(X509ContentType.Pkcs12), null, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+    }
+
+    // Setup step 1: a new certificate replaces the current one; its public part must then be uploaded to Entra ID.
+    public EntraSetupState CreateSetupCertificate(string actor)
+    {
+        using var certificate = NewGraphCertificate(DateTime.UtcNow, hostName);
+        store.ReplaceKey(keys.Protect(GraphKey, certificate), actor);
+        if (store.Key(GraphPendingKey) != null) store.RemoveKey(GraphPendingKey, actor);
+        var state = SetupState();
+        state.CurrentThumbprint = certificate.Thumbprint;
+        state.CurrentNotAfter = certificate.NotAfter.ToUniversalTime();
+        state.CurrentCreatedUtc = DateTime.UtcNow;
+        state.CurrentKeyId = null;
+        state.PendingThumbprint = null; state.PendingNotAfter = null; state.PendingKeyId = null; state.PendingCreatedUtc = null;
+        state.LastRenewalError = null;
+        SaveSetupState(state);
+        token = null;
+        return state;
+    }
+
+    public byte[] SetupPublicCertificate()
+    {
+        using var certificate = keys?.OpenKey(GraphKey);
+        return certificate?.RawData;
+    }
+
+    public string CredentialSource
+    {
+        get
+        {
+            if (!string.IsNullOrEmpty(options.EntraCertificatePath)) return "Certificate " + options.EntraCertificatePath + " (environment)";
+            if (SetupConfigured) return "Certificate " + SetupState().CurrentThumbprint + " created by the setup (renewed automatically)";
+            if (!string.IsNullOrEmpty(options.EntraClientSecret)) return "Client secret (environment)";
+            return "Not configured";
+        }
+    }
+
+    public static bool NeedsRenewal(EntraSetupState state, DateTime utcNow) => state.CurrentNotAfter.HasValue && state.CurrentNotAfter.Value - utcNow < TimeSpan.FromDays(RenewBeforeDays);
+
+    // Before each token request: renews 30 days before expiry, at most once per hour; errors stay on the setup page.
+    private async Task MaybeRenew()
+    {
+        if (store == null || !string.IsNullOrEmpty(options.EntraCertificatePath) || !SetupConfigured) return;
+        var state = SetupState();
+        if (string.IsNullOrEmpty(state.ObjectId) || (state.PendingThumbprint == null && !NeedsRenewal(state, DateTime.UtcNow))) return;
+        if (DateTime.UtcNow - lastAutomaticAttempt < TimeSpan.FromHours(1)) return;
+        lastAutomaticAttempt = DateTime.UtcNow;
+        try { await Renew("system:entra-renewal"); } catch (WindowsLapsException) { }
+    }
+
+    // Adds a new certificate to the app registration (proof signed with the current one), switches to it as soon as
+    // Entra accepts it and removes the previous key if its key ID is known. Returns a status text.
+    public async Task<string> Renew(string actor)
+    {
+        await renewGate.WaitAsync();
+        var state = SetupState();
+        state.LastAttemptUtc = DateTime.UtcNow;
+        try
+        {
+            if (!SetupConfigured) throw new WindowsLapsException("No setup certificate exists yet.");
+            if (!Guid.TryParse(state.ObjectId, out var objectId)) throw new WindowsLapsException("Enter the application's Object ID in the setup to allow automatic renewal.");
+            if (store.Key(GraphPendingKey) == null)
+            {
+                using var created = NewGraphCertificate(DateTime.UtcNow, hostName);
+                using var current = keys.OpenKey(GraphKey);
+                var (bearer, _) = await RequestToken(current);
+                var body = JsonSerializer.Serialize(new Dictionary<string, object>
+                {
+                    ["keyCredential"] = new Dictionary<string, object> { ["type"] = "AsymmetricX509Cert", ["usage"] = "Verify", ["key"] = Convert.ToBase64String(created.RawData) },
+                    ["passwordCredential"] = null, ["proof"] = KeyProof(current, objectId.ToString("D"), DateTime.UtcNow)
+                });
+                var request = new HttpRequestMessage(HttpMethod.Post, Graph + "applications/" + objectId.ToString("D") + "/addKey") { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+                var answer = await Send(request, false);
+                string keyId = null;
+                if (!string.IsNullOrEmpty(answer)) { using var document = JsonDocument.Parse(answer); keyId = Text(document.RootElement, "keyId"); }
+                store.ReplaceKey(keys.Protect(GraphPendingKey, created), actor);
+                state.PendingThumbprint = created.Thumbprint; state.PendingNotAfter = created.NotAfter.ToUniversalTime();
+                state.PendingKeyId = keyId; state.PendingCreatedUtc = DateTime.UtcNow;
+                SaveSetupState(state);
+            }
+            var message = await Activate(state, actor, objectId);
+            state.LastRenewalError = null;
+            SaveSetupState(state);
+            return message;
+        }
+        catch (WindowsLapsException ex)
+        {
+            state.LastRenewalError = ex.Message;
+            SaveSetupState(state);
+            throw;
+        }
+        finally { renewGate.Release(); }
+    }
+
+    // A new key can take minutes to replicate; until a token works with it, the current certificate stays active.
+    private async Task<string> Activate(EntraSetupState state, string actor, Guid objectId)
+    {
+        using var pending = keys.OpenKey(GraphPendingKey);
+        string bearer;
+        try { (bearer, _) = await RequestToken(pending); }
+        catch (WindowsLapsException)
+        {
+            return "The new certificate " + state.PendingThumbprint + " was added to the app registration. It becomes active as soon as Entra ID accepts it (usually within minutes); the current certificate stays in use until then.";
+        }
+        var previousKeyId = state.CurrentKeyId;
+        var previousThumbprint = state.CurrentThumbprint;
+        store.ReplaceKey(keys.Protect(GraphKey, pending), actor);
+        store.RemoveKey(GraphPendingKey, actor);
+        state.CurrentThumbprint = state.PendingThumbprint; state.CurrentNotAfter = state.PendingNotAfter;
+        state.CurrentKeyId = state.PendingKeyId; state.CurrentCreatedUtc = state.PendingCreatedUtc;
+        state.PendingThumbprint = null; state.PendingNotAfter = null; state.PendingKeyId = null; state.PendingCreatedUtc = null;
+        state.LastRenewalUtc = DateTime.UtcNow;
+        SaveSetupState(state);
+        token = null;
+        store.Audit(actor, "entra-graph-certificate-activated-" + state.CurrentThumbprint, Guid.Empty, Guid.Empty);
+        var removed = "";
+        if (Guid.TryParse(previousKeyId, out var keyId))
+        {
+            try
+            {
+                var body = JsonSerializer.Serialize(new Dictionary<string, object> { ["keyId"] = keyId.ToString("D"), ["proof"] = KeyProof(pending, objectId.ToString("D"), DateTime.UtcNow) });
+                var request = new HttpRequestMessage(HttpMethod.Post, Graph + "applications/" + objectId.ToString("D") + "/removeKey") { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+                await Send(request, false);
+                removed = " The previous certificate " + previousThumbprint + " was removed from the app registration.";
+            }
+            catch (WindowsLapsException ex) { removed = " The previous certificate could not be removed (" + ex.Message + "); it expires on its own."; }
+        }
+        else if (previousThumbprint != null) removed = " The previous certificate " + previousThumbprint + " stays in the app registration until it expires (you can remove it there).";
+        return "Renewed: certificate " + state.CurrentThumbprint + " is active until " + state.CurrentNotAfter?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "." + removed;
+    }
+
+    public string AdminConsentUrl(string redirectUri, string state) =>
+        "https://login.microsoftonline.com/" + options.EntraTenantId + "/v2.0/adminconsent?client_id=" + Uri.EscapeDataString(options.EntraClientId ?? "") +
+        "&scope=" + Uri.EscapeDataString("https://graph.microsoft.com/.default") + "&redirect_uri=" + Uri.EscapeDataString(redirectUri) + "&state=" + Uri.EscapeDataString(state);
 
     private async Task<string> GraphGet(string relative, bool allowNotFound = false)
     {

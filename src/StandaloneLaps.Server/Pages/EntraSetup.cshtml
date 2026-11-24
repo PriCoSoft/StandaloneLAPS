@@ -1,0 +1,62 @@
+@page "/entrasetup"
+@model EntraSetupModel
+@{
+    ViewData["Title"] = "Entra setup";
+    var state = Model.State;
+    var laps = Model.Laps;
+}
+<main class="content">
+<div class="breadcrumbs">SLAPS <span>/</span> <a href="settings">Settings</a> <span>/</span> Entra setup</div>
+<div class="page-heading"><div><p class="eyebrow">WINDOWS LAPS · MICROSOFT ENTRA ID</p><h1>Entra lookup setup</h1><p class="subtitle">Lets SLAPS read Windows LAPS passwords that Entra-joined devices back up to Microsoft Entra ID (Microsoft Graph).</p></div><span class="role-label">Administrators only</span></div>
+@if (!string.IsNullOrEmpty(Model.Info)) {<p class="notice success wide">@Model.Info</p>}
+@if (!string.IsNullOrEmpty(Model.ErrorText)) {<p class="notice danger wide">@Model.ErrorText</p>}
+@if (!laps.EntraEnabled) {<p class="notice wide">The Entra lookup is not switched on yet. You can prepare everything here; then set <code>Slaps__WindowsLapsEntraEnabled=true</code> and restart the container.</p>}
+@if (!string.IsNullOrEmpty(laps.EntraCertificatePath)) {<p class="notice wide"><code>Slaps__WindowsLapsEntraCertificatePath</code> names a certificate. It takes precedence; the certificate managed here is not used until that setting is removed.</p>}
+
+<section class="form-card settings-card setup-step">
+<div class="step-head"><span class="step-number @(Model.Configured ? "done" : "")">1</span><h2 class="card-title">Certificate</h2></div>
+<p class="helper">SLAPS signs in to Microsoft Graph as the app registration <span class="mono">@laps.EntraClientId</span> with a certificate created on this server. The private key is stored in the database, encrypted with the master key like the CA and recovery keys; only the public part is uploaded to Entra ID.</p>
+@if (Model.Configured)
+{
+<dl class="summary-list"><dt>Thumbprint</dt><dd class="mono">@state.CurrentThumbprint</dd><dt>Valid until</dt><dd>@EntraSetupModel.Day(state.CurrentNotAfter)</dd><dt>Created</dt><dd>@EntraSetupModel.Day(state.CurrentCreatedUtc)</dd></dl>
+<div class="form-actions"><a class="button" href="entrasetup?download=cer">Download public certificate (.cer)</a></div>
+<details class="replace"><summary>Replace certificate</summary><form method="post"><label class="checkbox"><input type="checkbox" name="confirmReplace" value="yes" />Create a new certificate. The Entra lookup stops working until the new one is uploaded.</label><button class="button secondary" type="submit" name="action" value="create">Create new certificate</button></form></details>
+}
+else
+{
+<form method="post"><button class="button" type="submit" name="action" value="create">Create certificate</button></form>
+}
+</section>
+
+<section class="form-card settings-card setup-step">
+<div class="step-head"><span class="step-number @(state.ConsentResult == "granted" ? "done" : "")">2</span><h2 class="card-title">App registration: certificate, redirect URI, permission</h2></div>
+<ol class="steps">
+<li>Open <a href="@Model.Portal("Credentials")" target="_blank" rel="noopener">Certificates &amp; secrets</a> → <em>Certificates</em> → <em>Upload certificate</em> → select the downloaded <code>.cer</code> file.</li>
+<li>Open <a href="@Model.Portal("Authentication")" target="_blank" rel="noopener">Authentication</a> → <em>Web</em> → add the redirect URI <code id="consent-uri">@Model.ConsentRedirectUri</code> <button type="button" class="copy-button" data-copy="consent-uri" hidden>Copy</button> (used once for the admin consent below).</li>
+<li>Open <a href="@Model.Portal("CallAnAPI")" target="_blank" rel="noopener">API permissions</a> → <em>Add a permission</em> → <em>Microsoft Graph</em> → <em>Application permissions</em> → <code>DeviceLocalCredential.Read.All</code>. Only for "Rotate via Intune": also <code>DeviceManagementManagedDevices.Read.All</code> and <code>DeviceManagementManagedDevices.PrivilegedOperations.All</code>.</li>
+<li>Grant admin consent (button below, or <em>Grant admin consent</em> on the API permissions page). This needs a Global Administrator or Privileged Role Administrator.</li>
+</ol>
+<form method="post"><button class="button" type="submit" name="action" value="consent">Grant admin consent</button></form>
+<p class="helper">@(state.ConsentUtc == null ? "No consent recorded by SLAPS yet." : "Last consent: " + state.ConsentResult + " · " + EntraSetupModel.Day(state.ConsentUtc) + " by " + state.ConsentBy)</p>
+</section>
+
+<section class="form-card settings-card setup-step">
+<div class="step-head"><span class="step-number @(state.ObjectId != null ? "done" : "")">3</span><h2 class="card-title">Automatic renewal</h2></div>
+<p class="helper">The certificate is valid for @WindowsLapsService.ValidityDays days. @WindowsLapsService.RenewBeforeDays days before it expires, SLAPS creates a new one and adds it to the app registration itself (Microsoft Graph <em>addKey</em>, signed with the current certificate; no extra permission needed), switches over and removes the old one. For this it needs the <strong>Object ID</strong> of the app registration (<a href="@Model.Portal("Overview")" target="_blank" rel="noopener">Overview</a> → <em>Object ID</em>, not the client ID).</p>
+<form method="post" class="inline-form"><label class="field-label" for="objectId">Application Object ID</label><input class="text-input" id="objectId" name="objectId" value="@state.ObjectId" placeholder="00000000-0000-0000-0000-000000000000" maxlength="40" /><div class="form-actions"><button class="button secondary" type="submit" name="action" value="object-id">Save</button></div></form>
+<dl class="summary-list">
+<dt>Next renewal</dt><dd>@(state.CurrentNotAfter.HasValue ? EntraSetupModel.Day(state.CurrentNotAfter.Value.AddDays(-WindowsLapsService.RenewBeforeDays)) : "—")@(state.ObjectId == null ? " (off: Object ID missing)" : "")</dd>
+<dt>Last renewal</dt><dd>@EntraSetupModel.Day(state.LastRenewalUtc)</dd>
+@if (state.PendingThumbprint != null) {<dt>Waiting for Entra</dt><dd class="mono">@state.PendingThumbprint (added @EntraSetupModel.Day(state.PendingCreatedUtc))</dd>}
+@if (state.LastRenewalError != null) {<dt>Last error</dt><dd class="error-text">@state.LastRenewalError</dd>}
+</dl>
+@if (Model.Configured && state.ObjectId != null) {<form method="post" data-ajax><button class="button secondary" type="submit" name="action" value="renew" data-busy="Renewing…">Renew now</button><p class="ajax-result" hidden aria-live="polite"></p></form>}
+</section>
+
+<section class="form-card settings-card setup-step">
+<div class="step-head"><span class="step-number">4</span><h2 class="card-title">Test</h2></div>
+<p class="helper">Requests a token and reads one entry of <span class="mono">deviceLocalCredentials</span> (no password). After uploading a certificate or granting consent, Entra may need a few minutes.</p>
+<form method="post" data-ajax><button class="button" type="submit" name="action" value="test" data-busy="Testing…">Test connection</button><p class="ajax-result" hidden aria-live="polite"></p></form>
+</section>
+<p class="identity">Signed in as @Model.Identity.DisplayName · @Model.Identity.Actor</p>
+</main>
