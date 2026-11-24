@@ -20,6 +20,7 @@
 {
 <a class="nav-item @(portal.Active == "add" ? "active" : "")" href="addclient"><span class="nav-icon">&#65291;</span>Add client</a>
 <a class="nav-item @(portal.Active == "deleted" ? "active" : "")" href="./?view=deleted"><span class="nav-icon">&#8634;</span>Deleted devices</a>
+<a class="nav-item @(portal.Active == "audit" ? "active" : "")" href="audit"><span class="nav-icon">&#9783;</span>Audit log</a>
 }
 <a class="nav-item @(portal.Active == "settings" ? "active" : "")" href="settings"><span class="nav-icon">&#9881;</span>Settings</a>
 <div class="nav-bottom"><span class="security-dot"></span>Encrypted vault<small>@portal.Limit versions per device</small><small class="version">Version @StandaloneLapsWeb.AppVersion.Number · container</small></div></aside>

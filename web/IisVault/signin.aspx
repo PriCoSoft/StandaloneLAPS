@@ -36,7 +36,8 @@ protected void Page_Load(object sender, EventArgs e)
         string returnUrl;
         var identity = PortalAuth.CompleteSignIn(Context, out returnUrl);
         PortalAuth.StartSession(Response, identity, DateTime.UtcNow);
-        Vault.Audit(identity.Actor, "portal-sign-in-" + identity.Role, Guid.Empty, Guid.Empty);
+        // The display name in the target lets the audit page show names instead of object IDs.
+        Vault.AuditTarget(identity.Actor, "portal-sign-in-" + identity.Role, identity.DisplayName);
         target = returnUrl;
     }
     catch (TokenValidationException ex)

@@ -14,7 +14,7 @@ namespace StandaloneLaps.Server;
 // Settings for the read-only Windows LAPS lookup (Slaps__WindowsLaps* environment variables). Everything is off by default.
 public sealed class WindowsLapsOptions
 {
-    public bool ReaderAllowed { get; init; }
+    public bool ReaderAllowed { get; init; } = true;  // WindowsLapsRequiredRole: Reader (default since 1.6.5) | Admin
     public bool AdEnabled { get; init; }
     public string AdServer { get; init; }
     public bool AdUseSsl { get; init; } = true;

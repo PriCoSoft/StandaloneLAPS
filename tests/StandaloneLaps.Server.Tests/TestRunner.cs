@@ -206,10 +206,13 @@ internal static class TestRunner
             Check("LDAP filter characters are rejected before any directory access", injection.Contains("Enter a computer name") && !injection.Contains("Cannot connect"));
             var readerRequest = new HttpRequestMessage(HttpMethod.Get, baseUrl + "windowslaps");
             readerRequest.Headers.Add("X-Slaps-Development-Role", "reader");
-            Check("readers cannot open Windows LAPS unless WindowsLapsRequiredRole=Reader", (await portalClient.SendAsync(readerRequest)).StatusCode == HttpStatusCode.Forbidden);
+            var readerLaps = await portalClient.SendAsync(readerRequest);
+            var readerLapsHtml = await readerLaps.Content.ReadAsStringAsync();
+            Check("readers may open Windows LAPS by default (WindowsLapsRequiredRole=Reader)", readerLaps.StatusCode == HttpStatusCode.OK && readerLapsHtml.Contains("Search for a computer"));
             var readerHome = new HttpRequestMessage(HttpMethod.Get, baseUrl);
             readerHome.Headers.Add("X-Slaps-Development-Role", "reader");
-            Check("readers do not see the Windows LAPS navigation item", !(await (await portalClient.SendAsync(readerHome)).Content.ReadAsStringAsync()).Contains("href=\"windowslaps\""));
+            var readerHomeHtml = await (await portalClient.SendAsync(readerHome)).Content.ReadAsStringAsync();
+            Check("readers see Windows LAPS but no Audit log in the navigation", readerHomeHtml.Contains("href=\"windowslaps\"") && !readerHomeHtml.Contains("href=\"audit\""));
             Check("search panel explains that only computers with a stored password are listed", lapsHtml.Contains("Only computers with a stored LAPS password are listed") && lapsHtml.Contains("class=\"search-panel\""));
             Check("device table is sortable and resizable (copy.js)", passwordTab.Contains("class=\"device-table sortable\"") && passwordTab.Contains("data-sort=\"number\"") && (await portalClient.GetStringAsync(baseUrl + "copy.js")).Contains("col-resizer"));
             var settingsLaps = await portalClient.GetStringAsync(baseUrl + "settings");
@@ -249,6 +252,23 @@ internal static class TestRunner
             Check("consent return is recorded and leads back to the setup", back.StatusCode == HttpStatusCode.Redirect && (await portalClient.GetStringAsync(baseUrl + "entrasetup")).Contains("Last consent: granted"));
             Check("consent return with a forged state is rejected", (await portalClient.GetAsync(baseUrl + "entra-consent?admin_consent=True&state=forged")).StatusCode == HttpStatusCode.Forbidden);
             Check("CSP allows the redirect of the consent form to Microsoft", consent.Headers.GetValues("Content-Security-Policy").First().Contains("form-action 'self' https://login.microsoftonline.com"));
+            Console.WriteLine("Audit log");
+            store.Audit("oidc:alice", "portal-sign-in-admin:Alice Admin", Guid.Empty, Guid.Empty);
+            store.Audit("oidc:alice", "windows-laps-search:=SRV-AUDIT01", Guid.Empty, Guid.Empty);
+            var auditHtml = await portalClient.GetStringAsync(baseUrl + "audit");
+            Check("audit page lists entries newest first with names and readable labels", auditHtml.Contains("Audit log") && auditHtml.Contains("href=\"audit\"") && auditHtml.Contains("Alice Admin") && auditHtml.Contains("Windows LAPS search")
+                && auditHtml.IndexOf("SRV-AUDIT01", StringComparison.Ordinal) < auditHtml.IndexOf("Signed in (administrator)", StringComparison.Ordinal));
+            Check("audit page shows Windows LAPS lookups, password reveals and Entra setup actions", auditHtml.Contains("windows-laps-search") && auditHtml.Contains("entra-admin-consent-started"));
+            var auditFiltered = await portalClient.GetStringAsync(baseUrl + "audit?q=alice&category=windows-laps");
+            Check("audit filter by name and category", auditFiltered.Contains("SRV-AUDIT01") && !auditFiltered.Contains("Signed in (administrator)") && !auditFiltered.Contains("entra-admin-consent-started"));
+            Check("audit date filter excludes other days", (await portalClient.GetStringAsync(baseUrl + "audit?from=2000-01-01&to=2000-01-02")).Contains("Nothing matches this filter"));
+            var csv = await portalClient.GetAsync(baseUrl + "audit?q=SRV-AUDIT01&format=csv");
+            var csvText = await csv.Content.ReadAsStringAsync();
+            Check("audit CSV export (UTF-8, formulas neutralised) is itself audited", csv.Content.Headers.ContentType?.MediaType == "text/csv" && csvText.Contains("\"'=SRV-AUDIT01\"") && csvText.Contains("\"Alice Admin\"")
+                && (await portalClient.GetStringAsync(baseUrl + "audit?category=admin")).Contains("Audit log exported"));
+            var readerAudit = new HttpRequestMessage(HttpMethod.Get, baseUrl + "audit");
+            readerAudit.Headers.Add("X-Slaps-Development-Role", "reader");
+            Check("readers cannot open the audit log", (await portalClient.SendAsync(readerAudit)).StatusCode == HttpStatusCode.Forbidden);
             await WindowsLapsTests.Renewal(Check, store, keys);
             Check("Windows LAPS reveal without antiforgery token is rejected", (await portalClient.PostAsync(baseUrl + "windowslaps?source=ad&id=" + Guid.NewGuid() + "&tab=password", new FormUrlEncodedContent(new Dictionary<string, string> { ["action"] = "reveal" }))).StatusCode == HttpStatusCode.BadRequest);
 

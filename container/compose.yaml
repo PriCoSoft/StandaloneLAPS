@@ -11,7 +11,7 @@ services:
     build:
       context: ..
       dockerfile: container/Dockerfile
-    image: slaps-server:1.6.4
+    image: slaps-server:1.6.5
     restart: unless-stopped
     ports:
       - "8443:8443"   # portal: allow only from internal admin networks
@@ -27,7 +27,7 @@ services:
       # Slaps__TlsCertificatePath: /certs/tls.crt
       # Slaps__TlsKeyPath: /certs/tls.key
       # Optional read-only Windows LAPS lookup (docs/Container.md, "Windows LAPS lookup"):
-      # Slaps__WindowsLapsRequiredRole: "Admin"                 # or Reader
+      # Slaps__WindowsLapsRequiredRole: "Reader"                # default; "Admin" = administrators only
       # Slaps__WindowsLapsAdEnabled: "true"
       # Slaps__WindowsLapsAdServer: "dc01.corp.example"          # LDAPS 636; also the DPAPI-NG key server
       # Slaps__WindowsLapsAdUsername: "svc-slaps-laps@corp.example"

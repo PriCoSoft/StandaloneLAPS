@@ -30,15 +30,18 @@ internal static class WindowsLapsTests
     private static void Options(Action<string, bool, string> check)
     {
         var defaults = Load(new Dictionary<string, string>());
-        check("Windows LAPS lookup is off by default", !defaults.WindowsLaps.Enabled && !defaults.WindowsLaps.ReaderAllowed, null);
+        check("Windows LAPS lookup is off by default; when on, readers may use it (WindowsLapsRequiredRole default Reader)", !defaults.WindowsLaps.Enabled && defaults.WindowsLaps.ReaderAllowed, null);
+        check("WindowsLapsRequiredRole=Admin limits the lookup to administrators", !Load(new Dictionary<string, string> { ["WindowsLapsRequiredRole"] = "admin" }).WindowsLaps.ReaderAllowed, null);
+        check("unknown WindowsLapsRequiredRole is rejected", Throws(() => Load(new Dictionary<string, string> { ["WindowsLapsRequiredRole"] = "Readers" })), null);
         var entra = Load(new Dictionary<string, string> { ["OidcAuthority"] = "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0", ["OidcClientId"] = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", ["WindowsLapsEntraEnabled"] = "true", ["WindowsLapsEntraClientSecret"] = "s" });
         check("Entra tenant and client default to the OIDC sign-in values", entra.WindowsLaps.EntraTenantId == "11111111-2222-3333-4444-555555555555" && entra.WindowsLaps.EntraClientId == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", null);
         check("Entra lookup without secret or certificate is allowed (certificate comes from the setup page)", !Throws(() => Load(new Dictionary<string, string> { ["WindowsLapsEntraEnabled"] = "true", ["WindowsLapsEntraTenantId"] = Guid.NewGuid().ToString(), ["WindowsLapsEntraClientId"] = Guid.NewGuid().ToString() })), null);
         check("invalid decrypt mode is rejected", Throws(() => Load(new Dictionary<string, string> { ["WindowsLapsAdEnabled"] = "true", ["WindowsLapsAdServer"] = "dc", ["WindowsLapsAdUsername"] = "u", ["WindowsLapsAdPassword"] = "p", ["WindowsLapsAdDecryptMode"] = "magic" })), null);
         var explicitCredentials = new WindowsLapsOptions { AdEnabled = true, AdUsername = "svc@corp.example", AdPassword = "x" };
         check("explicit AD credentials use the Python helper (native DPAPI-NG only uses the process identity)", explicitCredentials.UsePython && !new WindowsLapsOptions { AdEnabled = true }.UsePython == OperatingSystem.IsWindows(), null);
-        var reader = new WindowsLapsOptions { AdEnabled = true, ReaderAllowed = true };
-        check("WindowsLapsRequiredRole=Reader admits readers", reader.Allowed(new PortalUser { IsReader = true }) && !new WindowsLapsOptions { AdEnabled = true }.Allowed(new PortalUser { IsReader = true }), null);
+        var reader = new WindowsLapsOptions { AdEnabled = true };
+        check("WindowsLapsRequiredRole=Reader admits readers, Admin does not", reader.Allowed(new PortalUser { IsReader = true }) && !new WindowsLapsOptions { AdEnabled = true, ReaderAllowed = false }.Allowed(new PortalUser { IsReader = true }), null);
+        check("expire/rotate stay administrator-only for readers", !new WindowsLapsOptions { AdEnabled = true, AdAllowExpire = true }.CanRotate(new PortalUser { IsReader = true }, "ad"), null);
     }
 
     private sealed class FakeGraph : HttpMessageHandler

@@ -22,6 +22,8 @@
     <Compile Include="..\..\web\IisVault\App_Code\AppVersion.cs" Link="AppVersion.cs" />
     <!-- Windows LAPS attribute formats and native DPAPI-NG, shared with the IIS portal. -->
     <Compile Include="..\..\web\IisVault\App_Code\WindowsLaps.cs" Link="WindowsLaps.cs" />
+    <!-- Audit categories, labels, filter and CSV, shared with the IIS audit page. -->
+    <Compile Include="..\..\web\IisVault\App_Code\AuditFormat.cs" Link="AuditFormat.cs" />
     <None Include="..\..\web\IisVault\copy.js" Link="assets\copy.js" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- DPAPI-NG helper for Linux (Python dpapi-ng), see container/Dockerfile. -->
     <None Include="..\..\container\dpapi\slaps_dpapi_ng.py" Link="dpapi\slaps_dpapi_ng.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

@@ -74,6 +74,14 @@ public static class PortalAuth
                 o.TokenValidationParameters.RoleClaimType = options.OidcRoleClaim;
                 o.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
                 o.NonceCookie.SecurePolicy = CookieSecurePolicy.Always;
+                // Like the IIS portal: sign-ins are audited with the display name, so the audit page can show names instead of object IDs.
+                o.Events.OnTokenValidated = context =>
+                {
+                    var user = User(context.Principal, options);
+                    var role = user.IsAdmin ? "admin" : user.IsReader ? "reader" : "no-role";
+                    context.HttpContext.RequestServices.GetRequiredService<VaultStore>().Audit(user.Actor, "portal-sign-in-" + role + ":" + user.DisplayName, Guid.Empty, Guid.Empty);
+                    return Task.CompletedTask;
+                };
             });
         }
         services.AddAuthorization(o =>

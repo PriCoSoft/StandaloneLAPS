@@ -13,6 +13,32 @@ public static class FrameworkTests
     { if (!condition) throw new Exception("FAILED: " + label); passed++; Console.WriteLine("PASS Framework " + label); }
     private static void Fails(Action action, string label)
     { try { action(); } catch { Check(true, label); return; } throw new Exception("FAILED: " + label); }
+    // Audit page (audit.aspx): reader over audit.jsonl and the shared AuditFormat (also linked into the container).
+    private static void AuditPage(string root, Guid device)
+    {
+        Vault.AuditTarget("entra:11111111-0000-0000-0000-000000000001", "portal-sign-in-admin", "Alice Admin");
+        Vault.AuditTarget("entra:11111111-0000-0000-0000-000000000001", "windows-laps-search", "SRV-APP01");
+        Vault.Audit("entra:unverified", "portal-sign-in-denied: token expired", Guid.Empty, Guid.Empty);
+        File.AppendAllText(Path.Combine(root, "audit.jsonl"), "{not json\n\n");
+        bool more; System.Collections.Generic.Dictionary<string, string> names;
+        var all = Vault.ReadAudit(new AuditFilter(), 0, 1000, out more, out names);
+        Check(all.Count >= 4 && !more && all[0].Action == "portal-sign-in-denied" && all[0].Target == "token expired", "audit log is read newest first, malformed lines skipped, 'action: reason' split");
+        Check(names["entra:11111111-0000-0000-0000-000000000001"] == "Alice Admin", "audit page shows names from sign-in entries");
+        Check(Vault.ReadAudit(new AuditFilter { Text = "alice" }, 0, 10, out more, out names).Count == 2, "audit text filter matches display names");
+        Check(Vault.ReadAudit(new AuditFilter { Text = "srv-app01" }, 0, 10, out more, out names).Single().Action == "windows-laps-search", "audit text filter matches targets");
+        var access = Vault.ReadAudit(new AuditFilter { Category = "access" }, 0, 10, out more, out names);
+        Check(access.Count == 1 && access[0].Action == "password-reveal-attempt", "audit category filter (password access)");
+        Check(Vault.ReadAudit(new AuditFilter { Category = "failed" }, 0, 10, out more, out names).Single().Action == "portal-sign-in-denied", "audit category filter (failures)");
+        var page = Vault.ReadAudit(new AuditFilter(), 1, 2, out more, out names);
+        Check(page.Count == 2 && more && page[0].Action == all[1].Action, "audit paging");
+        Check(Vault.ReadAudit(new AuditFilter { FromUtc = DateTime.UtcNow.Date.AddDays(1) }, 0, 10, out more, out names).Count == 0
+            && Vault.ReadAudit(new AuditFilter { FromUtc = AuditFormat.ParseDay(DateTime.UtcNow.ToString("yyyy-MM-dd"), false), ToUtc = AuditFormat.ParseDay(DateTime.UtcNow.ToString("yyyy-MM-dd"), true) }, 0, 100, out more, out names).Count == all.Count,
+            "audit date filter (to date inclusive)");
+        Check(all.Any(e => e.DeviceId == device.ToString("D") && e.RotationId != null), "audit entries keep device and version");
+        Check(AuditFormat.Label("password-revealed") == "Password revealed" && AuditFormat.Label("settings-history-limit-20-to-30") == "History limit changed (20 to 30)" && AuditFormat.Label("some-new-event") == "Some new event", "audit labels with fallback");
+        Check(AuditFormat.CsvField("=cmd|' /C calc'!A0") == "\"'=cmd|' /C calc'!A0\"" && AuditFormat.CsvField("a\"b") == "\"a\"\"b\"", "CSV export neutralises formulas and quotes fields");
+        Check(AuditFormat.NormalizeCategory("bogus") == "" && AuditFormat.ParseDay("2026-13-01", false) == null, "invalid audit filter input is ignored");
+    }
     public static int Main(string[] args)
     {
         try { Run(args[0]); Console.WriteLine(passed + " .NET Framework checks passed."); return 0; }
@@ -63,6 +89,7 @@ public static class FrameworkTests
             Check(!Vault.Applied(device, Guid.NewGuid()), "unknown generation cannot be marked applied");
             Vault.Audit("test-reader", "password-reveal-attempt", device, rotation);
             Check(!File.ReadAllText(Path.Combine(root, "audit.jsonl")).Contains(payload.password), "audit contains no password");
+            AuditPage(root, device);
             Check(!File.ReadAllText(Directory.GetFiles(Path.Combine(root, device.ToString("D")), "*.record.json").Single()).Contains(payload.password), "record contains no password");
             Fails(() => Vault.Reveal(envelope), "web decryption disabled by default");
             var agent = new Client { role = "agent", deviceId = device.ToString("D") };

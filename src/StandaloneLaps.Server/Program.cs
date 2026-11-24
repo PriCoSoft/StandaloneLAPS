@@ -76,6 +76,7 @@ namespace StandaloneLaps.Server
                 o.Conventions.AuthorizeFolder("/", PortalAuth.ReaderPolicy);
                 o.Conventions.AuthorizePage("/AddClient", PortalAuth.AdminPolicy);
                 o.Conventions.AuthorizePage("/EntraSetup", PortalAuth.AdminPolicy);
+                o.Conventions.AuthorizePage("/Audit", PortalAuth.AdminPolicy);
                 o.Conventions.AllowAnonymousToPage("/Denied");
             }).ConfigureApplicationPartManager(manager =>
             {

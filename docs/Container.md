@@ -152,7 +152,12 @@ set only `Slaps__DatabaseProvider=postgresql` and the connection string. Run one
 - **Update:** extract the new release package, keep `secrets/` and `compose.yaml` settings, `docker compose up -d --build`.
   The data volume is kept.
 - **Health:** `/healthz` on the portal port (loopback always allowed); the image has a Docker `HEALTHCHECK`.
-- **Audit:** all API, portal and key actions are written to the `slaps_audit` table.
+- **Audit:** all API, portal and key actions are written to the `slaps_audit` table. Administrators see them under
+  **Audit log** (since 1.6.5): newest first, filter by text, event group and date, 100 per page, *Export CSV*
+  (up to 10,000 entries, audited). Sign-ins are recorded with the display name, so entries show names instead of
+  object IDs. Roles are the same as in the IIS portal (README, "Audit log" table): readers search and reveal
+  SLAPS and Windows LAPS passwords; administrators also manage clients, settings, Entra setup, expire/rotate and
+  see the audit log.
 
 ## Migrating from the IIS backend
 
@@ -181,6 +186,7 @@ Like the IIS portal (see README, "Windows LAPS lookup"), the container can **rea
 
 - LDAP via `System.DirectoryServices.Protocols` (libldap in the image) with a simple bind of a **service account over LDAPS (636)**. Plain LDAP with a password is refused. If the DC certificate is issued by an internal CA, mount a directory with the CA certificate (OpenSSL hashed directory, `c_rehash`) and set `WindowsLapsAdCaDirectory`.
 - Encrypted passwords (`msLAPS-Encrypted*`) are decrypted by `/app/dpapi/slaps_dpapi_ng.py` with the Python library [dpapi-ng](https://github.com/jborean93/dpapi-ng) (installed in a venv at `/opt/dpapi` by the Dockerfile). It fetches the group key from the DC over RPC (MS-GKDI, TCP 135 + dynamic RPC ports) with the same service account. Credentials and blobs go to the helper through stdin, never the command line. Default authentication is NTLM via pyspnego; for Kerberos build with `--build-arg SLAPS_DPAPI_KERBEROS=true` and provide a `krb5.conf`.
+- **Firewall from the Docker host to the DC:** LDAPS 636 for the search and clear-text passwords; for *encrypted* Windows LAPS passwords also **TCP 135 and the dynamic RPC range (default 49152–65535)**, plus 88 when Kerberos is used. dpapi-ng asks the endpoint mapper (135) for the port of the key service and then connects to that port; there is no fixed-port or LDAP-only option (LAPS-WebUI uses the same library and needs the same ports). If only 636 is open, the reveal fails with `TimeoutError: timed out`. Check from the container: `docker exec <container> /opt/dpapi/bin/python -c "import socket; socket.create_connection(('dc01.corp.example', 135), 5); print('ok')"` (the key service port is shown on the DC by `Get-NetTCPConnection -State Listen -OwningProcess (Get-Process lsass).Id`). Set `WindowsLapsAdDecryptServer` to pin decryption to a DC whose ports are open.
 - The service account needs read permission on the LAPS attributes (`Set-LapsADReadPasswordPermission`, `Set-AdmPwdReadPasswordPermission`) and must be a member of the group in the LAPS policy *Configure authorized password decryptors*.
 - On a Windows host (development) the server uses native DPAPI-NG with its own identity when no service account is configured.
 
@@ -188,7 +194,7 @@ Like the IIS portal (see README, "Windows LAPS lookup"), the container can **rea
 
 | Setting (`Slaps__…`) | Default | Meaning |
 |---|---|---|
-| `WindowsLapsRequiredRole` | `Admin` | `Admin` or `Reader` |
+| `WindowsLapsRequiredRole` | `Reader` | `Reader` (readers and administrators) or `Admin` (administrators only); until 1.6.4 the default was `Admin` — set `Admin` explicitly to keep that |
 | `WindowsLapsAdEnabled` | `false` | Active Directory lookup |
 | `WindowsLapsAdServer` | — (required on Linux) | DC host name (LDAP and DPAPI-NG key server) |
 | `WindowsLapsAdUseSsl`, `WindowsLapsAdPort` | `true`, 636 | LDAPS; must stay on with a service account on Linux |

@@ -157,6 +157,40 @@ public sealed class VaultStore
         command.ExecuteNonQuery();
     }
 
+    // Audit page: newest first; filter semantics shared with the IIS portal (AuditFormat), so it is applied while streaming.
+    // names: actor -> display name from the sign-in entries ("portal-sign-in-<role>:<name>").
+    public List<StandaloneLapsWeb.AuditEntry> AuditEntries(StandaloneLapsWeb.AuditFilter filter, int skip, int take, out bool more, out Dictionary<string, string> names)
+    {
+        names = new Dictionary<string, string>(StringComparer.Ordinal);
+        more = false;
+        using var connection = Open();
+        using (var signIns = Command(connection, null, "SELECT actor, action FROM slaps_audit WHERE action LIKE 'portal-sign-in-%' ORDER BY id"))
+        using (var reader = signIns.ExecuteReader())
+            while (reader.Read())
+                StandaloneLapsWeb.AuditFormat.CollectName(names, AuditRow(reader.GetString(0), reader.GetString(1), null, null, null, DateTimeOffset.MinValue));
+        var result = new List<StandaloneLapsWeb.AuditEntry>();
+        using var command = Command(connection, null,
+            "SELECT a.utc, a.actor, a.action, a.device_id, a.rotation_id, c.display_name FROM slaps_audit a LEFT JOIN slaps_clients c ON c.device_id = a.device_id ORDER BY a.id DESC");
+        using var rows = command.ExecuteReader();
+        var matched = 0;
+        while (rows.Read())
+        {
+            if (!DateTimeOffset.TryParse(rows.GetString(0), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var utc)) continue;
+            var entry = AuditRow(rows.GetString(1), rows.GetString(2), Text(rows, 3), Text(rows, 4), Text(rows, 5), utc);
+            if (!StandaloneLapsWeb.AuditFormat.Matches(entry, filter, names)) continue;
+            if (matched++ < skip) continue;
+            if (result.Count == take) { more = true; break; }
+            result.Add(entry);
+        }
+        return result;
+    }
+
+    private static StandaloneLapsWeb.AuditEntry AuditRow(string actor, string rawAction, string device, string rotation, string deviceName, DateTimeOffset utc)
+    {
+        StandaloneLapsWeb.AuditFormat.SplitTarget(rawAction, out var action, out var target);
+        return new StandaloneLapsWeb.AuditEntry { Utc = utc, Actor = actor, Action = action, Target = string.IsNullOrEmpty(target) ? null : target, DeviceId = device, RotationId = rotation, DeviceName = deviceName };
+    }
+
     public PortalSettings Settings()
     {
         using var connection = Open();

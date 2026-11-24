@@ -54,8 +54,9 @@ namespace StandaloneLapsWeb
             return identity != null && identity.IsAdmin && (source == "ad" ? AdEnabled && AdAllowExpire : source == "entra" && EntraEnabled && EntraAllowRotate);
         }
 
-        // "Admin" (default) or "Reader": which SLAPS role may look up and reveal directory passwords.
-        public static bool ReaderAllowed { get { return string.Equals(Vault.Setting("WindowsLapsRequiredRole").Trim(), "Reader", StringComparison.OrdinalIgnoreCase); } }
+        // "Reader" (default since 1.6.5, same as SLAPS passwords) or "Admin": which SLAPS role may look up and reveal directory passwords.
+        // Expire/rotate, settings, Entra setup and the audit log stay administrator-only.
+        public static bool ReaderAllowed { get { return !string.Equals(Vault.Setting("WindowsLapsRequiredRole").Trim(), "Admin", StringComparison.OrdinalIgnoreCase); } }
         public static bool Enabled { get { return AdEnabled || EntraEnabled; } }
         public static bool Allowed(PortalIdentity identity) { return identity != null && Enabled && (identity.IsAdmin || ReaderAllowed); }
 

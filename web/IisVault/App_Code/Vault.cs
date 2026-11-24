@@ -475,6 +475,65 @@ namespace StandaloneLapsWeb
             catch (Exception) { }
             return reference;
         }
+        // Audit page: newest first, filtered, one page. Reads the whole audit.jsonl (shared read while the portal appends).
+        // names: actor -> display name from sign-in entries. Malformed lines are skipped, not fatal.
+        public static List<AuditEntry> ReadAudit(AuditFilter filter, int skip, int take, out bool more, out Dictionary<string, string> names)
+        {
+            names = new Dictionary<string, string>(StringComparer.Ordinal);
+            var matches = new List<AuditEntry>();
+            var path = Path.Combine(DataRoot, "audit.jsonl");
+            more = false;
+            if (!File.Exists(path)) return matches;
+            var devices = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var client in Clients()) if (client.deviceId != null && !devices.ContainsKey(client.deviceId)) devices[client.deviceId] = client.displayName;
+            var serializer = new JavaScriptSerializer { MaxJsonLength = 1048576, RecursionLimit = 4 };
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var reader = new StreamReader(stream, Encoding.UTF8))
+            {
+                string line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    var entry = ParseAuditLine(serializer, line);
+                    if (entry == null) continue;
+                    string name;
+                    if (entry.DeviceId != null && devices.TryGetValue(entry.DeviceId, out name)) entry.DeviceName = name;
+                    AuditFormat.CollectName(names, entry);
+                    matches.Add(entry);
+                }
+            }
+            var filtered = new List<AuditEntry>();
+            for (var i = matches.Count - 1; i >= 0; i--)
+            {
+                if (!AuditFormat.Matches(matches[i], filter, names)) continue;
+                if (filtered.Count == skip + take) { more = true; break; }
+                filtered.Add(matches[i]);
+            }
+            return filtered.Skip(skip).ToList();
+        }
+
+        public static AuditEntry ParseAuditLine(JavaScriptSerializer serializer, string line)
+        {
+            if (string.IsNullOrWhiteSpace(line)) return null;
+            try
+            {
+                var values = serializer.Deserialize<Dictionary<string, object>>(line);
+                if (values == null) return null;
+                Func<string, string> text = key => { object value; return values.TryGetValue(key, out value) && value != null ? Convert.ToString(value, CultureInfo.InvariantCulture) : null; };
+                DateTimeOffset utc;
+                if (!DateTimeOffset.TryParse(text("utc"), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out utc)) return null;
+                string action, target;
+                AuditFormat.SplitTarget(text("action"), out action, out target);
+                var entry = new AuditEntry { Utc = utc, Actor = text("actor"), Action = action, Target = text("target") ?? target };
+                var device = text("deviceId"); var rotation = text("rotationId");
+                entry.DeviceId = string.IsNullOrEmpty(device) || device == Guid.Empty.ToString("D") ? null : device;
+                entry.RotationId = string.IsNullOrEmpty(rotation) || rotation == Guid.Empty.ToString("D") ? null : rotation;
+                if (string.IsNullOrEmpty(entry.Target)) entry.Target = null;
+                return entry;
+            }
+            catch (ArgumentException) { return null; }
+            catch (InvalidOperationException) { return null; }
+        }
+
         private static void AppendAudit(string line)
         {
             lock (Gate)

@@ -30,7 +30,7 @@ namespace StandaloneLapsWeb
             return html.ToString();
         }
 
-        // active: devices, windowslaps, add, deleted, settings
+        // active: devices, windowslaps, add, deleted, audit, settings
         public static string Navigation(string active, bool isAdmin)
         {
             var html = new StringBuilder("<aside class=\"navigation\"><p class=\"nav-label\">MANAGE</p>");
@@ -42,6 +42,7 @@ namespace StandaloneLapsWeb
             {
                 Item(html, "addclient.aspx", "&#65291;", "Add client", active == "add");
                 Item(html, "Default.aspx?view=deleted", "&#8634;", "Deleted devices", active == "deleted");
+                Item(html, "audit.aspx", "&#9783;", "Audit log", active == "audit");
             }
             Item(html, "settings.aspx", "&#9881;", "Settings", active == "settings");
             html.Append("<div class=\"nav-bottom\"><span class=\"security-dot\"></span>Encrypted vault<small>")

@@ -93,7 +93,7 @@ public sealed class ServerOptions
             ServerName = Value("ServerName"),
             WindowsLaps = new WindowsLapsOptions
             {
-                ReaderAllowed = string.Equals(Value("WindowsLapsRequiredRole"), "Reader", StringComparison.OrdinalIgnoreCase),
+                ReaderAllowed = RequiredRoleIsReader(Value("WindowsLapsRequiredRole")),
                 AdEnabled = Flag("WindowsLapsAdEnabled", false),
                 AdServer = Value("WindowsLapsAdServer"),
                 AdUseSsl = Flag("WindowsLapsAdUseSsl", true),
@@ -138,6 +138,14 @@ public sealed class ServerOptions
             throw new InvalidOperationException("Set Slaps__OidcAuthority (e.g. https://login.microsoftonline.com/<tenant-id>/v2.0) and Slaps__OidcClientId.");
         if (PublicUrl == null) throw new InvalidOperationException("Set Slaps__PublicUrl to the portal URL, e.g. https://slaps.example.com:8443/.");
         if (AgentApiUrl == null) throw new InvalidOperationException("Set Slaps__AgentApiUrl to the agent API URL written into client packages, e.g. https://slaps.example.com:8444/.");
+    }
+
+    // Reader (default since 1.6.5, same as SLAPS passwords) or Admin. A typo must not silently widen or narrow access.
+    private static bool RequiredRoleIsReader(string value)
+    {
+        if (value == null || string.Equals(value, "Reader", StringComparison.OrdinalIgnoreCase)) return true;
+        if (string.Equals(value, "Admin", StringComparison.OrdinalIgnoreCase)) return false;
+        throw new InvalidOperationException("Slaps:WindowsLapsRequiredRole must be Reader or Admin.");
     }
 
     private static string TenantFromAuthority(string authority)

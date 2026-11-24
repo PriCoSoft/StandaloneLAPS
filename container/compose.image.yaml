@@ -28,7 +28,7 @@ services:
       # Slaps__TlsCertificatePath: /certs/tls.crt
       # Slaps__TlsKeyPath: /certs/tls.key
       # Optional read-only Windows LAPS lookup (docs/Container.md, "Windows LAPS lookup"):
-      # Slaps__WindowsLapsRequiredRole: "Admin"                 # or Reader
+      # Slaps__WindowsLapsRequiredRole: "Reader"                # default; "Admin" = administrators only
       # Slaps__WindowsLapsAdEnabled: "true"
       # Slaps__WindowsLapsAdServer: "dc01.corp.example"          # LDAPS 636; also the DPAPI-NG key server
       # Slaps__WindowsLapsAdUsername: "svc-slaps-laps@corp.example"

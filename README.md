@@ -73,8 +73,8 @@ The portal uses OpenID Connect directly (ID token via `form_post`, no client sec
 1. **App registrations > New registration**: name `SLAPS`, *Accounts in this organizational directory only*, redirect URI platform **Web** = `https://slaps.example.com/signin.aspx`.
 2. **Authentication**: enable **ID tokens (used for implicit and hybrid flows)**. No client secret is needed.
 3. **App roles > Create app role** twice (allowed member types: Users/Groups):
-   - display name *SLAPS Admin*, value **`SLAPS.Admin`** — full access including Add client, delete/restore and reveal,
-   - display name *SLAPS Reader*, value **`SLAPS.Reader`** — view history, download envelopes, reveal passwords.
+   - display name *SLAPS Admin*, value **`SLAPS.Admin`** — everything a reader may do, plus Add client, delete/restore, settings, Entra setup, *Expire/Rotate now* (Windows LAPS) and the **Audit log**,
+   - display name *SLAPS Reader*, value **`SLAPS.Reader`** — search devices, view history, download envelopes, reveal passwords; also look up and reveal Windows LAPS passwords when that lookup is on (unless `WindowsLapsRequiredRole=Admin`).
 4. **API permissions**: keep *Microsoft Graph > User.Read* (delegated) and click **Grant admin consent** so users are not asked for consent.
 5. **Enterprise applications > SLAPS > Properties**: **Assignment required = Yes** (optionally *Visible to users = No*).
 6. **Users and groups > Add user/group**: assign users or groups with the SLAPS Admin or SLAPS Reader role. Assigned users without a SLAPS role are denied.
@@ -162,6 +162,17 @@ Open `https://slaps.example.com/` from an internal network and sign in. Search d
 
 Administrators can delete a device (recoverable: tombstone blocks the agent, history is archived under `_deleted`) and restore it. Readers cannot manage devices. Reveal, delete, restore and Add client use session-bound CSRF tokens; deletion requires typing the device name. The portal HTML-encodes output, forbids caching and framing and logs access and management actions to `App_Data\Vault\audit.jsonl` (ordinary protected storage, not a tamper-evident log).
 
+**Audit log** (menu *Audit log*, administrators only, since 1.6.5): all entries newest first — password reveals and history views, Windows LAPS searches/reveals/expiry, sign-ins (with the user's display name, so other entries show names instead of object IDs), agent uploads, device and settings changes, Entra setup. Filter by text (user, device, computer, action), event group (password access, Windows LAPS / Entra, administration, sign-in, agents, failures and denials) and date range; 100 entries per page; *Export CSV* downloads up to 10,000 matching entries (formula characters are neutralised for spreadsheets; the export itself is audited).
+
+| | Reader (`SLAPS.Reader`) | Administrator (`SLAPS.Admin`) |
+| --- | --- | --- |
+| Search devices, history, reveal and download SLAPS passwords | yes | yes |
+| Windows LAPS: search and reveal | yes (`WindowsLapsRequiredRole=Reader`, default) | yes |
+| Windows LAPS: *Expire/Rotate now* | no | yes, if switched on |
+| Add client, delete/restore devices, history limit, Entra setup, connection tests | no | yes |
+| Audit log | no | yes |
+| Settings page | read only | yes |
+
 ## Windows LAPS lookup (Active Directory and Entra ID)
 
 Optionally, the portal also **reads** passwords that Windows LAPS or legacy Microsoft LAPS stored for domain-joined or Entra-joined computers (menu *Windows LAPS*). SLAPS never stores or writes these passwords (administrators can optionally let them expire, see `WindowsLapsAdAllowExpire` / `WindowsLapsEntraAllowRotate` below); it reads them live, decrypts them on the server if needed and shows them with the same *Show* / *Copy* buttons. Search and reveal are audited (`windows-laps-search`, `windows-laps-reveal-ad|entra` in `audit.jsonl`). Each source is switched on separately; everything is off by default.
@@ -170,7 +181,9 @@ Optionally, the portal also **reads** passwords that Windows LAPS or legacy Micr
 | --- | --- | --- |
 | AD, legacy Microsoft LAPS | `ms-Mcs-AdmPwd`, `ms-Mcs-AdmPwdExpirationTime` | Read permission on the confidential attribute (`Set-AdmPwdReadPasswordPermission`) |
 | AD, Windows LAPS (clear text) | `msLAPS-Password` (JSON), `msLAPS-PasswordExpirationTime` | `Set-LapsADReadPasswordPermission` for the OUs |
-| AD, Windows LAPS (encrypted) | `msLAPS-EncryptedPassword`, `…EncryptedPasswordHistory`, `…EncryptedDSRMPassword(History)` | Read permission **and** membership in the group named in the LAPS policy *Configure authorized password decryptors* (`ADPasswordEncryptionPrincipal`, default Domain Admins); domain functional level 2016, reachable DC |
+| AD, Windows LAPS (encrypted) | `msLAPS-EncryptedPassword`, `…EncryptedPasswordHistory`, `…EncryptedDSRMPassword(History)` | Read permission **and** membership in the group named in the LAPS policy *Configure authorized password decryptors* (`ADPasswordEncryptionPrincipal`, default Domain Admins); domain functional level 2016; **RPC to a DC** (see ports below) |
+
+**Network ports to the domain controllers:** LDAP 389 (IIS default, Kerberos-sealed) or LDAPS 636, and Kerberos 88 (TCP/UDP). Decrypting *encrypted* Windows LAPS passwords additionally needs **RPC: TCP 135 plus the dynamic RPC range (default TCP 49152–65535)**, because the decryption key is fetched from the DC's Group Key Distribution Service (MS-GKDI) — this applies to `Get-LapsADPassword`, the IIS portal and the container (Python dpapi-ng) alike; there is no LDAP-only way short of reading the forest's KDS root key, which SLAPS deliberately does not do. Clear-text Windows LAPS and legacy LAPS need only LDAP/LDAPS. A timeout on reveal (`TimeoutError: timed out`) means RPC is blocked. To narrow the firewall rule, allow the dynamic range only to the DCs, or restrict the DCs' RPC port range (`netsh int ipv4 set dynamicport tcp …` or `HKLM\SOFTWARE\Microsoft\Rpc\Internet`), which affects every RPC service on them.
 | Entra ID | Microsoft Graph `directory/deviceLocalCredentials` | Application permission `DeviceLocalCredential.Read.All` with admin consent |
 
 **IIS (Windows, native):** the application pool identity does everything. LDAP uses Kerberos with signing and sealing (or LDAPS with `WindowsLapsAdUseSsl=true`), encrypted passwords are decrypted with `NCryptUnprotectSecret` (DPAPI-NG, like `Get-LapsADPassword`). The IIS server must be domain-joined. Recommended: run the pool as a gMSA, grant it read permission only on the OUs that should be visible, and add it to a dedicated decryptor group (only one principal per policy, so the group should contain your LAPS admins and the gMSA). With `ApplicationPoolIdentity` the server's computer account is used on the network.
@@ -188,7 +201,7 @@ Alternatives: a certificate in LocalMachine\My (`WindowsLapsEntraCertificateThum
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `WindowsLapsRequiredRole` | `Admin` | `Admin` or `Reader`: who may search and reveal directory passwords |
+| `WindowsLapsRequiredRole` | `Reader` | `Reader` (readers and administrators, like SLAPS passwords) or `Admin` (administrators only): who may search and reveal directory passwords. Until 1.6.4 the default was `Admin`; an upgrade with `Install-SlapsServer.ps1` keeps the value of the existing web.config. |
 | `WindowsLapsAdEnabled` | `false` | Active Directory lookup |
 | `WindowsLapsAdServer` | empty | DC or domain DNS name; empty = domain of the IIS server |
 | `WindowsLapsAdSearchBase` | empty | Limit to an OU (DN); empty = whole domain (`defaultNamingContext`) |
