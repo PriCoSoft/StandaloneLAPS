@@ -86,11 +86,92 @@ namespace StandaloneLapsWeb
             }
         }
 
-        public static string CategoryLabel(string action)
+        public static string CategoryKey(string action)
         {
             foreach (var category in new[] { "access", "agent", "sign-in", "admin", "windows-laps" })
-                if (InCategory(category, action)) return Categories.First(c => c.Key == category).Value;
-            return "Other";
+                if (InCategory(category, action)) return category;
+            return "other";
+        }
+
+        public static string CategoryLabel(string action)
+        {
+            var key = CategoryKey(action);
+            return key == "other" ? "Other" : Categories.First(c => c.Key == key).Value;
+        }
+
+        // "entra:<object id>" -> Entra ID, "oidc:<sub>" -> OIDC, "certificate:<sha256>" -> Agent, "DOMAIN\user" -> Windows.
+        public static string ActorSource(string actor)
+        {
+            actor = actor ?? "";
+            if (actor.StartsWith("entra:", StringComparison.Ordinal)) return "Entra ID";
+            if (actor.StartsWith("oidc:", StringComparison.Ordinal)) return "OIDC";
+            if (actor.StartsWith("certificate:", StringComparison.Ordinal)) return "Agent";
+            if (actor.StartsWith("system:", StringComparison.Ordinal)) return "System";
+            return actor.IndexOf('\\') >= 0 || actor.IndexOf(':') < 0 ? "Windows" : actor.Substring(0, actor.IndexOf(':'));
+        }
+
+        public static string ActorDisplayName(AuditEntry entry, IDictionary<string, string> names)
+        {
+            var actor = entry.Actor ?? "";
+            string name;
+            if (names != null && names.TryGetValue(actor, out name)) return name;
+            if (actor.StartsWith("certificate:", StringComparison.Ordinal))
+                return entry.DeviceName ?? "Certificate " + actor.Substring(12, Math.Min(12, actor.Length - 12));
+            var colon = actor.IndexOf(':');
+            return actor.IndexOf('\\') < 0 && colon > 0 ? actor.Substring(colon + 1) : (actor.Length == 0 ? "—" : actor);
+        }
+
+        // Windows LAPS entries use "<object id>" or "<object id> <computer name>" as target.
+        public static bool WindowsLapsTarget(AuditEntry entry, IDictionary<string, string> names, out string objectId, out string computer)
+        {
+            objectId = computer = null;
+            var target = (entry.Target ?? "").Trim();
+            Guid id;
+            if (entry.Action == null || !entry.Action.StartsWith("windows-laps-", StringComparison.Ordinal) || target.Length < 36 || !Guid.TryParseExact(target.Substring(0, 36), "D", out id)) return false;
+            objectId = id.ToString("D");
+            computer = target.Substring(36).Trim();
+            string known;
+            if (computer.Length == 0) computer = names != null && names.TryGetValue("laps:" + objectId, out known) ? known : null;
+            return true;
+        }
+
+        private static string H(string value) { return System.Net.WebUtility.HtmlEncode(value ?? ""); }
+        private static string Badge(string css, string text, string title)
+        {
+            return "<span class=\"audit-badge" + (css.Length == 0 ? "" : " " + css) + "\"" + (title == null ? "" : " title=\"" + H(title) + "\"") + ">" + H(text) + "</span>";
+        }
+
+        // Table cells (HTML, encoded here so the IIS page and the Razor page render the same markup).
+        public static string ActorHtml(AuditEntry entry, IDictionary<string, string> names)
+        {
+            return "<span class=\"audit-line\"><span class=\"audit-name\">" + H(ActorDisplayName(entry, names)) + "</span>"
+                + Badge("source", ActorSource(entry.Actor), entry.Actor) + "</span>";
+        }
+
+        public static string EventHtml(AuditEntry entry)
+        {
+            return "<span class=\"audit-line\"><span class=\"audit-event" + (IsFailure(entry.Action ?? "") ? " failed" : "") + "\">" + H(Label(entry.Action)) + "</span>"
+                + Badge("cat-" + CategoryKey(entry.Action), CategoryLabel(entry.Action), entry.Action) + "</span>";
+        }
+
+        public static string TargetHtml(AuditEntry entry, IDictionary<string, string> names, string deviceLink)
+        {
+            var html = new StringBuilder();
+            string objectId, computer;
+            if (entry.DeviceId != null)
+                html.Append("<span class=\"audit-line\"><a href=\"").Append(H(deviceLink + entry.DeviceId)).Append("\" title=\"Device ID: ").Append(H(entry.DeviceId)).Append("\">")
+                    .Append(H(entry.DeviceName ?? entry.DeviceId)).Append("</a>")
+                    .Append(entry.RotationId == null ? "" : Badge("", "Version", "Rotation ID: " + entry.RotationId)).Append("</span>");
+            if (WindowsLapsTarget(entry, names, out objectId, out computer))
+            {
+                var ad = entry.Action.EndsWith("-ad", StringComparison.Ordinal) || entry.Action.Contains("-ad-");
+                html.Append("<span class=\"audit-line\"><span class=\"audit-target\" title=\"Object ID: ").Append(H(objectId)).Append("\">")
+                    .Append(computer == null ? "<span class=\"mono\">" + H(objectId.Substring(0, 8)) + "…</span>" : H(computer)).Append("</span>")
+                    .Append(Badge(ad ? "ad" : "entra", ad ? "Active Directory" : "Entra ID", (ad ? "AD object ID: " : "Entra device ID: ") + objectId)).Append("</span>");
+            }
+            else if (!string.IsNullOrEmpty(entry.Target))
+                html.Append("<span class=\"audit-target\">").Append(H(entry.Target)).Append("</span>");
+            return html.Length == 0 ? "<span class=\"muted\">—</span>" : html.ToString();
         }
 
         private static readonly Dictionary<string, string> Labels = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -162,15 +243,21 @@ namespace StandaloneLapsWeb
             var text = filter.Text.Trim();
             string name;
             var actorName = names != null && entry.Actor != null && names.TryGetValue(entry.Actor, out name) ? name : null;
-            return new[] { entry.Actor, actorName, entry.Action, Label(entry.Action), entry.Target, entry.DeviceId, entry.DeviceName, entry.RotationId }
+            string objectId, computer;
+            WindowsLapsTarget(entry, names, out objectId, out computer);
+            return new[] { entry.Actor, actorName, entry.Action, Label(entry.Action), entry.Target, computer, entry.DeviceId, entry.DeviceName, entry.RotationId }
                 .Any(value => value != null && value.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
-        // Actor -> display name from the sign-in entries (newest wins: callers pass entries oldest first).
+        // Actor -> display name from the sign-in entries, "laps:<object id>" -> computer name from Windows LAPS reveals
+        // (newest wins: callers pass entries oldest first).
         public static void CollectName(IDictionary<string, string> names, AuditEntry entry)
         {
             if (entry.Actor != null && entry.Action != null && entry.Action.StartsWith("portal-sign-in-", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(entry.Target))
                 names[entry.Actor] = entry.Target.Trim();
+            string objectId, computer;
+            if (entry.Action != null && entry.Action.StartsWith("windows-laps-revealed-", StringComparison.Ordinal) && WindowsLapsTarget(entry, null, out objectId, out computer) && !string.IsNullOrEmpty(computer))
+                names["laps:" + objectId] = computer;
         }
 
         // yyyy-MM-dd from a date input; the "to" date is inclusive, so the exclusive bound is the next day.
@@ -184,12 +271,14 @@ namespace StandaloneLapsWeb
 
         public static string Csv(IEnumerable<AuditEntry> entries, IDictionary<string, string> names)
         {
-            var csv = new StringBuilder("utc,actor,actor_name,action,description,target,device_id,device_name,rotation_id\r\n");
+            var csv = new StringBuilder("utc,actor,actor_source,actor_name,action,description,category,target,windows_laps_id,device_id,device_name,rotation_id\r\n");
             foreach (var entry in entries)
             {
-                string name;
+                string name, objectId, computer;
                 var actorName = names != null && entry.Actor != null && names.TryGetValue(entry.Actor, out name) ? name : "";
-                csv.Append(string.Join(",", new[] { entry.Utc.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture), entry.Actor, actorName, entry.Action, Label(entry.Action), entry.Target, entry.DeviceId, entry.DeviceName, entry.RotationId }.Select(CsvField))).Append("\r\n");
+                var target = WindowsLapsTarget(entry, names, out objectId, out computer) ? computer : entry.Target;
+                csv.Append(string.Join(",", new[] { entry.Utc.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture), entry.Actor, ActorSource(entry.Actor), actorName,
+                    entry.Action, Label(entry.Action), CategoryLabel(entry.Action), target, objectId, entry.DeviceId, entry.DeviceName, entry.RotationId }.Select(CsvField))).Append("\r\n");
             }
             return csv.ToString();
         }

@@ -24,7 +24,6 @@ protected string Link(int page, string format)
     if (format != null) parts.Add("format=" + format);
     return "audit.aspx" + (parts.Count == 0 ? "" : "?" + string.Join("&", parts));
 }
-protected string ActorName(string actor) { string name; return actor != null && Names.TryGetValue(actor, out name) ? name : null; }
 protected void Page_Load(object sender, EventArgs e)
 {
     Identity = PortalAuth.Require(Context);
@@ -79,11 +78,11 @@ protected void Page_Load(object sender, EventArgs e)
 <% if (Entries.Count == 0) { %><div class="empty-state compact"><span class="empty-icon">&#9783;</span><h2>No audit entries</h2><p><%= Query.Length > 0 || Category.Length > 0 || From.Length > 0 || To.Length > 0 ? "Nothing matches this filter." : "Nothing has been recorded yet." %></p></div>
 <% } else { %>
 <div class="table-scroll"><table class="device-table audit-table sortable" data-table-key="audit"><thead><tr><th data-sort="text">Time (UTC)</th><th data-sort="text">User / client</th><th data-sort="text">Event</th><th data-sort="text">Target</th></tr></thead><tbody>
-<% foreach (var entry in Entries) { var name = ActorName(entry.Actor); var failure = AuditFormat.IsFailure(entry.Action); %><tr>
+<% foreach (var entry in Entries) { %><tr>
 <td class="date-cell" data-sort-value="<%= E(entry.Utc.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss")) %>"><%= E(entry.Utc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss")) %></td>
-<td><% if (name != null) { %><strong class="audit-name"><%= E(name) %></strong><% } %><small class="audit-sub mono"><%= E(entry.Actor) %></small></td>
-<td><span class="audit-event<%= failure ? " failed" : "" %>"><%= E(AuditFormat.Label(entry.Action)) %></span><small class="audit-sub"><%= E(AuditFormat.CategoryLabel(entry.Action)) %> · <code><%= E(entry.Action) %></code></small></td>
-<td><% if (entry.DeviceId != null) { %><a href="Default.aspx?device=<%= E(entry.DeviceId) %>"><%= E(entry.DeviceName ?? entry.DeviceId) %></a><% } %><% if (!string.IsNullOrEmpty(entry.Target)) { %><span class="audit-target"><%= E(entry.Target) %></span><% } %><% if (entry.RotationId != null) { %><small class="audit-sub mono">Version <%= E(entry.RotationId) %></small><% } %><% if (entry.DeviceId == null && string.IsNullOrEmpty(entry.Target)) { %><span class="muted">—</span><% } %></td>
+<td><%= AuditFormat.ActorHtml(entry, Names) %></td>
+<td><%= AuditFormat.EventHtml(entry) %></td>
+<td><%= AuditFormat.TargetHtml(entry, Names, "Default.aspx?device=") %></td>
 </tr><% } %>
 </tbody></table></div>
 <% } %>

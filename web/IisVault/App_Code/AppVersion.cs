@@ -4,7 +4,7 @@ namespace StandaloneLapsWeb
     // Increase it for every release that is deployed.
     public static class AppVersion
     {
-        public const string Number = "1.6.5";
+        public const string Number = "1.6.6";
         public const string Assembly = Number + ".0";
     }
 }

@@ -255,7 +255,13 @@ internal static class TestRunner
             Console.WriteLine("Audit log");
             store.Audit("oidc:alice", "portal-sign-in-admin:Alice Admin", Guid.Empty, Guid.Empty);
             store.Audit("oidc:alice", "windows-laps-search:=SRV-AUDIT01", Guid.Empty, Guid.Empty);
+            store.Audit("oidc:alice", "windows-laps-reveal-entra:7d0c4a52-1b9e-4c3e-9f55-2f7f1c9a0b11", Guid.Empty, Guid.Empty);
+            store.Audit("oidc:alice", "windows-laps-revealed-entra:7d0c4a52-1b9e-4c3e-9f55-2f7f1c9a0b11 PC-AUDIT02", Guid.Empty, Guid.Empty);
             var auditHtml = await portalClient.GetStringAsync(baseUrl + "audit");
+            Check("audit cells: source badge with ID on hover, computer name with object ID on hover", auditHtml.Contains("title=\"oidc:alice\">OIDC<")
+                && auditHtml.Contains("title=\"Object ID: 7d0c4a52-1b9e-4c3e-9f55-2f7f1c9a0b11\">PC-AUDIT02<") && auditHtml.Contains(">Entra ID<"));
+            var lapsCsv = await (await portalClient.GetAsync(baseUrl + "audit?q=PC-AUDIT02&format=csv")).Content.ReadAsStringAsync();
+            Check("audit CSV has the Windows LAPS object ID in its own column", lapsCsv.Contains("windows_laps_id") && lapsCsv.Contains("\"PC-AUDIT02\",\"7d0c4a52-1b9e-4c3e-9f55-2f7f1c9a0b11\""));
             Check("audit page lists entries newest first with names and readable labels", auditHtml.Contains("Audit log") && auditHtml.Contains("href=\"audit\"") && auditHtml.Contains("Alice Admin") && auditHtml.Contains("Windows LAPS search")
                 && auditHtml.IndexOf("SRV-AUDIT01", StringComparison.Ordinal) < auditHtml.IndexOf("Signed in (administrator)", StringComparison.Ordinal));
             Check("audit page shows Windows LAPS lookups, password reveals and Entra setup actions", auditHtml.Contains("windows-laps-search") && auditHtml.Contains("entra-admin-consent-started"));

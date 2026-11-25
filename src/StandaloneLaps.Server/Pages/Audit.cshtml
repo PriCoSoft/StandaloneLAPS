@@ -32,12 +32,11 @@ else
 <div class="table-scroll"><table class="device-table audit-table sortable" data-table-key="audit"><thead><tr><th data-sort="text">Time (UTC)</th><th data-sort="text">User / client</th><th data-sort="text">Event</th><th data-sort="text">Target</th></tr></thead><tbody>
 @foreach (var entry in Model.Entries)
 {
-var name = Model.ActorName(entry.Actor);
 <tr>
 <td class="date-cell" data-sort-value="@entry.Utc.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture)">@entry.Utc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture)</td>
-<td>@if (name != null) {<strong class="audit-name">@name</strong>}<small class="audit-sub mono">@entry.Actor</small></td>
-<td><span class="audit-event @(AuditFormat.IsFailure(entry.Action) ? "failed" : "")">@AuditFormat.Label(entry.Action)</span><small class="audit-sub">@AuditFormat.CategoryLabel(entry.Action) · <code>@entry.Action</code></small></td>
-<td>@if (entry.DeviceId != null) {<a href="./?device=@entry.DeviceId">@(entry.DeviceName ?? entry.DeviceId)</a>}@if (!string.IsNullOrEmpty(entry.Target)) {<span class="audit-target">@entry.Target</span>}@if (entry.RotationId != null) {<small class="audit-sub mono">Version @entry.RotationId</small>}@if (entry.DeviceId == null && string.IsNullOrEmpty(entry.Target)) {<span class="muted">—</span>}</td>
+<td>@Html.Raw(AuditFormat.ActorHtml(entry, Model.Names))</td>
+<td>@Html.Raw(AuditFormat.EventHtml(entry))</td>
+<td>@Html.Raw(AuditFormat.TargetHtml(entry, Model.Names, "./?device="))</td>
 </tr>
 }
 </tbody></table></div>

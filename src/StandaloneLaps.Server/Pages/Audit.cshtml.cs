@@ -19,7 +19,6 @@ public sealed class AuditModel : PortalPage
 
     public bool Filtered => Query.Length > 0 || Category.Length > 0 || From.Length > 0 || To.Length > 0;
 
-    public string ActorName(string actor) => actor != null && Names.TryGetValue(actor, out var name) ? name : null;
 
     public string Link(int page, string format)
     {

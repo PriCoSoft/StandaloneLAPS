@@ -38,6 +38,23 @@ public static class FrameworkTests
         Check(AuditFormat.Label("password-revealed") == "Password revealed" && AuditFormat.Label("settings-history-limit-20-to-30") == "History limit changed (20 to 30)" && AuditFormat.Label("some-new-event") == "Some new event", "audit labels with fallback");
         Check(AuditFormat.CsvField("=cmd|' /C calc'!A0") == "\"'=cmd|' /C calc'!A0\"" && AuditFormat.CsvField("a\"b") == "\"a\"\"b\"", "CSV export neutralises formulas and quotes fields");
         Check(AuditFormat.NormalizeCategory("bogus") == "" && AuditFormat.ParseDay("2026-13-01", false) == null, "invalid audit filter input is ignored");
+        const string lapsId = "5e1a2e5c-b46a-4f13-8ce0-241627f93c11";
+        Vault.AuditTarget("entra:11111111-0000-0000-0000-000000000001", "windows-laps-reveal-ad", lapsId);
+        Vault.AuditTarget("entra:11111111-0000-0000-0000-000000000001", "windows-laps-revealed-ad", lapsId + " WIN-3227");
+        all = Vault.ReadAudit(new AuditFilter(), 0, 1000, out more, out names);
+        var requested = all.First(e => e.Action == "windows-laps-reveal-ad");
+        var targetHtml = AuditFormat.TargetHtml(requested, names, "Default.aspx?device=");
+        Check(targetHtml.Contains(">WIN-3227<") && targetHtml.Contains("title=\"Object ID: " + lapsId + "\"") && targetHtml.Contains(">Active Directory<"),
+            "audit target shows the computer name, Windows LAPS object ID only on hover (name resolved from a later reveal)");
+        var actorHtml = AuditFormat.ActorHtml(requested, names);
+        Check(actorHtml.Contains(">Alice Admin<") && actorHtml.Contains("title=\"entra:11111111-0000-0000-0000-000000000001\">Entra ID<")
+            && AuditFormat.ActorHtml(new AuditEntry { Actor = "certificate:abcdef0123456789", DeviceName = "SRV-DMZ01" }, names).Contains(">SRV-DMZ01<"),
+            "audit user cell: name plus source badge with the ID on hover; agents shown by device name");
+        Check(AuditFormat.EventHtml(requested).Contains("title=\"windows-laps-reveal-ad\">Password access<")
+            && AuditFormat.TargetHtml(all.First(e => e.RotationId != null), names, "Default.aspx?device=").Contains("title=\"Rotation ID: "), "audit event category badge and device version on hover");
+        Check(AuditFormat.TargetHtml(new AuditEntry { Action = "x", Target = "<b>" }, names, "").Contains("&lt;b&gt;"), "audit cells are HTML-encoded");
+        var csvLines = AuditFormat.Csv(new[] { requested }, names).Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
+        Check(csvLines[0].Contains(",target,windows_laps_id,") && csvLines[1].Contains("\"WIN-3227\",\"" + lapsId + "\""), "CSV export has the Windows LAPS object ID in its own column");
     }
     public static int Main(string[] args)
     {

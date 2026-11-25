@@ -164,7 +164,7 @@ public sealed class VaultStore
         names = new Dictionary<string, string>(StringComparer.Ordinal);
         more = false;
         using var connection = Open();
-        using (var signIns = Command(connection, null, "SELECT actor, action FROM slaps_audit WHERE action LIKE 'portal-sign-in-%' ORDER BY id"))
+        using (var signIns = Command(connection, null, "SELECT actor, action FROM slaps_audit WHERE action LIKE 'portal-sign-in-%' OR action LIKE 'windows-laps-revealed-%' ORDER BY id"))
         using (var reader = signIns.ExecuteReader())
             while (reader.Read())
                 StandaloneLapsWeb.AuditFormat.CollectName(names, AuditRow(reader.GetString(0), reader.GetString(1), null, null, null, DateTimeOffset.MinValue));
